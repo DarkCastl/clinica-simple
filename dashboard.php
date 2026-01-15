@@ -1,5 +1,5 @@
 <?php
-// dashboard.php - PANEL DE CONTROL PRINCIPAL
+// dashboard.php - PANEL DE CONTROL PRINCIPAL CON LOGO
 session_start();
 require_once 'config.php';
 
@@ -14,6 +14,7 @@ $total_pacientes = $conexion->query("SELECT COUNT(*) as total FROM pacientes")->
 $total_consultas = $conexion->query("SELECT COUNT(*) as total FROM historial")->fetch_assoc()['total'];
 $pacientes_hoy = $conexion->query("SELECT COUNT(*) as total FROM pacientes WHERE DATE(fecha_registro) = CURDATE()")->fetch_assoc()['total'];
 $consultas_hoy = $conexion->query("SELECT COUNT(*) as total FROM historial WHERE fecha = CURDATE()")->fetch_assoc()['total'];
+$citas_hoy = $conexion->query("SELECT COUNT(*) as total FROM agenda WHERE fecha = CURDATE() AND estado = 'pendiente'")->fetch_assoc()['total'];
 
 // Obtener últimas actividades
 $actividades = $conexion->query("
@@ -58,6 +59,118 @@ $actividades = $conexion->query("
         #main-content {
             padding: 20px;
             transition: all 0.3s ease;
+        }
+        
+        /* TOP BAR MEJORADA CON LOGO */
+        .top-bar {
+            background: white;
+            padding: 1.2rem 1.5rem;
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 3px 15px rgba(0, 0, 0, 0.08);
+            border: 1px solid #eef2f7;
+        }
+        
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .logo-img {
+            height: 45px;
+            width: auto;
+            border-radius: 10px;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+            object-fit: contain;
+            background: white;
+            padding: 3px;
+        }
+        
+        .logo-img:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.15);
+        }
+        
+        .logo-placeholder {
+            width: 45px;
+            height: 45px;
+            background: linear-gradient(135deg, #3498db, #9b59b6);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 1.2rem;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        .search-container {
+            position: relative;
+            max-width: 350px;
+        }
+        
+        .search-container .input-group {
+            border-radius: 25px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+            border: 1px solid #dee2e6;
+        }
+        
+        .search-container .input-group:focus-within {
+            box-shadow: 0 4px 15px rgba(52, 152, 219, 0.2);
+            border-color: #3498db;
+        }
+        
+        .search-container input {
+            border: none;
+            padding-left: 15px;
+        }
+        
+        .search-container input:focus {
+            box-shadow: none;
+            outline: none;
+        }
+        
+        .search-btn {
+            border-top-left-radius: 0;
+            border-bottom-left-radius: 0;
+            padding-left: 20px;
+            padding-right: 20px;
+        }
+        
+        .search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 10px;
+            margin-top: 5px;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            display: none;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .search-result-item {
+            padding: 12px 15px;
+            border-bottom: 1px solid #f1f5f9;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .search-result-item:hover {
+            background: #f8fafc;
+            transform: translateX(3px);
+        }
+        
+        .search-result-item:last-child {
+            border-bottom: none;
         }
         
         /* STAT CARDS */
@@ -175,15 +288,6 @@ $actividades = $conexion->query("
             margin: 0 auto 1rem;
         }
         
-        /* TOP BAR */
-        .top-bar {
-            background: white;
-            padding: 1.5rem;
-            border-radius: 12px;
-            margin-bottom: 1.5rem;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-        }
-        
         .user-avatar {
             width: 40px;
             height: 40px;
@@ -213,7 +317,7 @@ $actividades = $conexion->query("
         .text-warning { color: #f1c40f !important; }
         .text-info { color: #3498db !important; }
         
-        /* Estilos para resultados de búsqueda */
+        /* Estilos para modal de búsqueda */
         #resultadosBusqueda {
             max-height: 300px;
             overflow-y: auto;
@@ -239,10 +343,41 @@ $actividades = $conexion->query("
             font-size: 0.9rem;
         }
         
-        /* Estilo para mensajes de error/éxito */
         .alert-result {
             padding: 10px 15px;
             margin: 0;
+        }
+        
+        /* Responsive */
+        @media (max-width: 992px) {
+            .search-container {
+                max-width: 250px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .top-bar {
+                flex-direction: column;
+                gap: 15px;
+            }
+            
+            .logo-container {
+                width: 100%;
+                justify-content: center;
+                margin-bottom: 10px;
+            }
+            
+            .search-container {
+                max-width: 100%;
+                order: 2;
+            }
+            
+            .user-actions {
+                order: 3;
+                width: 100%;
+                justify-content: center;
+                margin-top: 10px;
+            }
         }
     </style>
 </head>
@@ -252,37 +387,85 @@ $actividades = $conexion->query("
     
     <!-- CONTENIDO PRINCIPAL -->
     <div id="main-content">
-        <!-- TOP BAR -->
+        <!-- TOP BAR MEJORADA CON LOGO Y BUSCADOR -->
         <div class="top-bar">
-            <div class="d-flex justify-content-between align-items-center">
-                <div>
-                    <h1 class="h3 mb-1">Panel de Control</h1>
-                    <p class="text-muted small mb-0">
-                        <i class="bi bi-calendar3 me-1"></i>
-                        <?php echo date('d/m/Y'); ?> • 
-                        <span id="liveClock"><?php echo date('H:i:s'); ?></span>
-                    </p>
+            <div class="d-flex justify-content-between align-items-center flex-wrap">
+                <!-- LOGO Y TÍTULO -->
+                <div class="logo-container">
+                    <?php 
+                    $logo_path = 'img/logo-clinica.png';
+                    if (file_exists($logo_path)): 
+                    ?>
+                    <img src="<?php echo $logo_path; ?>" alt="Logo Clínica Simple" class="logo-img">
+                    <?php else: ?>
+                    <div class="logo-placeholder">
+                        <i class="bi bi-heart-pulse"></i>
+                    </div>
+                    <?php endif; ?>
+                    
+                    <div>
+                        <h1 class="h4 mb-1">Panel de Control</h1>
+                        <p class="text-muted small mb-0">
+                            <i class="bi bi-calendar3 me-1"></i>
+                            <?php echo date('d/m/Y'); ?> • 
+                            <span id="liveClock"><?php echo date('H:i:s'); ?></span>
+                        </p>
+                    </div>
                 </div>
                 
-                <div class="d-flex align-items-center gap-3">
+                <!-- BUSCADOR GLOBAL -->
+                <div class="search-container">
+                    <div class="input-group">
+                        <span class="input-group-text bg-white border-0">
+                            <i class="bi bi-search text-muted"></i>
+                        </span>
+                        <input type="text" class="form-control border-0" 
+                               id="globalSearch" 
+                               placeholder="Buscar paciente, consulta, cita...">
+                        <button class="btn btn-primary search-btn" type="button" onclick="buscarGlobal()">
+                            <i class="bi bi-search"></i>
+                        </button>
+                    </div>
+                    
+                    <!-- RESULTADOS DE BÚSQUEDA -->
+                    <div class="search-results" id="globalSearchResults">
+                        <!-- Los resultados aparecerán aquí -->
+                    </div>
+                </div>
+                
+                <!-- NOTIFICACIONES Y PERFIL -->
+                <div class="d-flex align-items-center gap-3 user-actions">
                     <div class="dropdown">
                         <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
                             <i class="bi bi-bell"></i>
-                            <span class="badge bg-danger">3</span>
+                            <span class="badge bg-danger"><?php echo $citas_hoy; ?></span>
                         </button>
                         <div class="dropdown-menu dropdown-menu-end">
                             <h6 class="dropdown-header">Notificaciones</h6>
-                            <a class="dropdown-item" href="#">
+                            <?php if ($pacientes_hoy > 0): ?>
+                            <a class="dropdown-item" href="pacientes.php">
                                 <i class="bi bi-person-plus text-primary me-2"></i>
-                                Nuevo paciente registrado
+                                <?php echo $pacientes_hoy; ?> nuevo(s) paciente(s) hoy
                             </a>
-                            <a class="dropdown-item" href="#">
-                                <i class="bi bi-calendar-check text-success me-2"></i>
-                                Cita programada para hoy
+                            <?php endif; ?>
+                            
+                            <?php if ($consultas_hoy > 0): ?>
+                            <a class="dropdown-item" href="historial.php">
+                                <i class="bi bi-file-medical text-success me-2"></i>
+                                <?php echo $consultas_hoy; ?> consulta(s) hoy
                             </a>
-                            <a class="dropdown-item" href="#">
-                                <i class="bi bi-exclamation-triangle text-warning me-2"></i>
-                                Recordatorio: Actualizar historial
+                            <?php endif; ?>
+                            
+                            <?php if ($citas_hoy > 0): ?>
+                            <a class="dropdown-item" href="agenda.php">
+                                <i class="bi bi-calendar-check text-warning me-2"></i>
+                                <?php echo $citas_hoy; ?> cita(s) pendiente(s)
+                            </a>
+                            <?php endif; ?>
+                            
+                            <div class="dropdown-divider"></div>
+                            <a class="dropdown-item text-center small" href="notificaciones.php">
+                                Ver todas las notificaciones
                             </a>
                         </div>
                     </div>
@@ -372,10 +555,10 @@ $actividades = $conexion->query("
                     <div class="stat-icon bg-warning mb-3">
                         <i class="bi bi-calendar-check"></i>
                     </div>
-                    <div class="stat-number">0</div>
+                    <div class="stat-number"><?php echo $citas_hoy; ?></div>
                     <div class="fw-medium mb-1">Citas Programadas</div>
                     <small class="text-muted d-block">
-                        <i class="bi bi-calendar me-1"></i> Agenda disponible
+                        <i class="bi bi-calendar me-1"></i> Para hoy
                     </small>
                 </div>
             </div>
@@ -435,7 +618,7 @@ $actividades = $conexion->query("
                             <h5 class="fw-semibold">Buscar Paciente</h5>
                             <p class="text-muted small mb-3">Encuentra pacientes rápidamente</p>
                             <button class="btn btn-info w-100" data-bs-toggle="modal" data-bs-target="#buscarModal">
-                                <i class="bi bi-search me-1"></i> Buscar
+                                <i class="bi bi-search me-1"></i> Buscar Avanzado
                             </button>
                         </div>
                     </div>
@@ -591,12 +774,12 @@ $actividades = $conexion->query("
         </footer>
     </div>
     
-    <!-- MODAL BUSCAR -->
+    <!-- MODAL BUSCAR AVANZADO -->
     <div class="modal fade" id="buscarModal" tabindex="-1">
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title"><i class="bi bi-search me-2"></i> Buscar Paciente</h5>
+                    <h5 class="modal-title"><i class="bi bi-search me-2"></i> Búsqueda Avanzada</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
@@ -639,7 +822,178 @@ $actividades = $conexion->query("
         }
         setInterval(updateClock, 1000);
         
-        // BÚSQUEDA AUTOMÁTICA MIENTRAS ESCRIBE
+        // BUSCADOR GLOBAL
+        function buscarGlobal() {
+            const termino = document.getElementById('globalSearch').value.trim();
+            const resultados = document.getElementById('globalSearchResults');
+            
+            if (!termino) {
+                resultados.innerHTML = `
+                    <div class="p-3 text-center text-muted">
+                        <i class="bi bi-search fs-4"></i>
+                        <p class="mt-2 mb-0">Escribe para buscar pacientes o consultas</p>
+                    </div>`;
+                resultados.style.display = 'block';
+                return;
+            }
+            
+            // Mostrar carga
+            resultados.innerHTML = `
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Buscando...</span>
+                    </div>
+                    <p class="mt-2 text-muted">Buscando "${termino}"...</p>
+                </div>`;
+            resultados.style.display = 'block';
+            
+            // Hacer petición AJAX para búsqueda global
+            fetch(`buscar_global.php?termino=${encodeURIComponent(termino)}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Error en la respuesta del servidor');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    mostrarResultadosGlobales(data);
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    resultados.innerHTML = `
+                        <div class="alert alert-danger">
+                            <i class="bi bi-x-circle"></i> 
+                            Error en la búsqueda: ${error.message}
+                        </div>`;
+                });
+        }
+        
+        // MOSTRAR RESULTADOS GLOBALES
+        function mostrarResultadosGlobales(data) {
+            const resultados = document.getElementById('globalSearchResults');
+            
+            if (data.error) {
+                resultados.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-x-circle"></i> 
+                        ${data.error}
+                    </div>`;
+                return;
+            }
+            
+            let html = `<h6 class="p-3 border-bottom mb-0">Resultados para: <strong>"${document.getElementById('globalSearch').value}"</strong></h6>`;
+            
+            // Mostrar pacientes
+            if (data.pacientes && data.pacientes.length > 0) {
+                html += `<div class="search-result-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <i class="bi bi-people-fill text-primary me-2"></i>
+                            <strong>Pacientes (${data.pacientes.length})</strong>
+                        </div>
+                        <span class="badge bg-primary">${data.pacientes.length}</span>
+                    </div>
+                </div>`;
+                
+                data.pacientes.slice(0, 3).forEach(paciente => {
+                    html += `
+                        <div class="search-result-item" onclick="window.location.href='pacientes.php?accion=ver&id=${paciente.id}'">
+                            <div class="d-flex align-items-center">
+                                <i class="bi bi-person me-2 text-primary"></i>
+                                <div>
+                                    <div class="fw-medium">${paciente.nombre}</div>
+                                    <small class="text-muted">${paciente.dui || 'Sin DUI'} | ${paciente.telefono || 'Sin teléfono'}</small>
+                                </div>
+                            </div>
+                        </div>`;
+                });
+            }
+            
+            // Mostrar consultas
+            if (data.consultas && data.consultas.length > 0) {
+                html += `<div class="search-result-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <i class="bi bi-file-medical text-success me-2"></i>
+                            <strong>Consultas (${data.consultas.length})</strong>
+                        </div>
+                        <span class="badge bg-success">${data.consultas.length}</span>
+                    </div>
+                </div>`;
+            }
+            
+            // Mostrar citas
+            if (data.citas && data.citas.length > 0) {
+                html += `<div class="search-result-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <i class="bi bi-calendar-check text-warning me-2"></i>
+                            <strong>Citas (${data.citas.length})</strong>
+                        </div>
+                        <span class="badge bg-warning">${data.citas.length}</span>
+                    </div>
+                </div>`;
+            }
+            
+            // Si no hay resultados
+            if ((!data.pacientes || data.pacientes.length === 0) && 
+                (!data.consultas || data.consultas.length === 0) && 
+                (!data.citas || data.citas.length === 0)) {
+                html += `
+                    <div class="p-4 text-center">
+                        <i class="bi bi-search fs-1 text-muted"></i>
+                        <p class="mt-3 mb-0">No se encontraron resultados</p>
+                        <small class="text-muted">Intenta con otros términos de búsqueda</small>
+                    </div>`;
+            } else {
+                // Botón para ver todos los resultados
+                html += `
+                    <div class="p-3 border-top text-center">
+                        <a href="buscar.php?q=${encodeURIComponent(document.getElementById('globalSearch').value)}" 
+                           class="btn btn-outline-primary btn-sm">
+                            <i class="bi bi-search me-1"></i> Ver búsqueda avanzada
+                        </a>
+                    </div>`;
+            }
+            
+            resultados.innerHTML = html;
+        }
+        
+        // Búsqueda automática mientras escribe (global)
+        document.getElementById('globalSearch').addEventListener('input', function(e) {
+            const termino = this.value.trim();
+            const resultados = document.getElementById('globalSearchResults');
+            
+            if (termino.length >= 2) {
+                clearTimeout(window.globalSearchTimeout);
+                window.globalSearchTimeout = setTimeout(() => {
+                    buscarGlobal();
+                }, 300);
+            } else if (termino.length === 0) {
+                resultados.style.display = 'none';
+            }
+        });
+        
+        // Cerrar resultados al hacer clic fuera
+        document.addEventListener('click', function(e) {
+            const searchContainer = document.querySelector('.search-container');
+            const searchResults = document.getElementById('globalSearchResults');
+            const globalSearch = document.getElementById('globalSearch');
+            
+            if (!searchContainer.contains(e.target) && e.target !== globalSearch) {
+                searchResults.style.display = 'none';
+            }
+        });
+        
+        // Buscar al presionar Enter (global)
+        document.getElementById('globalSearch').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                buscarGlobal();
+            }
+        });
+        
+        // BÚSQUEDA AVANZADA (modal) - Mantener tu código existente
         document.getElementById('terminoBusqueda').addEventListener('input', function(e) {
             const termino = this.value.trim();
             
@@ -653,7 +1007,6 @@ $actividades = $conexion->query("
             }
         });
         
-        // BUSCAR AL PRESIONAR ENTER
         document.getElementById('terminoBusqueda').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
@@ -661,7 +1014,6 @@ $actividades = $conexion->query("
             }
         });
         
-        // FUNCIÓN PRINCIPAL DE BÚSQUEDA
         function buscarPaciente() {
             const tipo = document.getElementById('tipoBusqueda').value;
             const termino = document.getElementById('terminoBusqueda').value.trim();
@@ -718,11 +1070,9 @@ $actividades = $conexion->query("
                 });
         }
         
-        // FUNCIÓN PARA MOSTRAR RESULTADOS
         function mostrarResultados(pacientes) {
             const resultados = document.getElementById('resultadosBusqueda');
             
-            // Verificar si es un objeto de error
             if (typeof pacientes === 'object' && pacientes.error) {
                 resultados.innerHTML = `
                     <div class="alert alert-danger alert-result">
@@ -732,7 +1082,6 @@ $actividades = $conexion->query("
                 return;
             }
             
-            // Verificar si es un array
             if (!Array.isArray(pacientes)) {
                 resultados.innerHTML = `
                     <div class="alert alert-warning alert-result">
@@ -782,7 +1131,6 @@ $actividades = $conexion->query("
                     </div>`;
             });
             
-            // Botón para ver todos los resultados
             html += `
                 <div class="text-center mt-3">
                     <a href="pacientes.php" class="btn btn-outline-primary btn-sm">
@@ -793,7 +1141,6 @@ $actividades = $conexion->query("
             resultados.innerHTML = html;
         }
         
-        // LIMPIAR RESULTADOS AL CERRAR MODAL
         document.getElementById('buscarModal').addEventListener('hidden.bs.modal', function() {
             document.getElementById('terminoBusqueda').value = '';
             document.getElementById('resultadosBusqueda').innerHTML = '';
