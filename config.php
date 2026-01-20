@@ -1,6 +1,6 @@
 <?php
-// config.php - VERSIÓN COMPLETA CON TODAS LAS TABLAS
-// NO incluir session_start() aquí
+// config.php - VERSIÓN COMPLETA CON TODAS LAS TABLAS Y ROLES
+// NO incluir session_start() aquí - se maneja en verificarSesion()
 
 $host = "localhost";
 $usuario = "root";
@@ -119,11 +119,69 @@ foreach ($tablas_sql as $sql) {
     }
 }
 
+// ====================================================================
+// CREAR USUARIOS POR DEFECTO SI NO EXISTEN
+// ====================================================================
+
 // Crear usuario admin por defecto si no existe
 $verificar_admin = $conexion->query("SELECT COUNT(*) as total FROM usuarios WHERE usuario = 'admin'");
 if ($verificar_admin && $verificar_admin->fetch_assoc()['total'] == 0) {
     $password_hash = password_hash('admin123', PASSWORD_DEFAULT);
     $conexion->query("INSERT INTO usuarios (usuario, password, nombre, rol) VALUES ('admin', '$password_hash', 'Administrador', 'admin')");
+    error_log("Usuario admin creado automáticamente");
+}
+
+// Crear usuario médico por defecto si no existe
+$verificar_medico = $conexion->query("SELECT COUNT(*) as total FROM usuarios WHERE usuario = 'medico'");
+if ($verificar_medico && $verificar_medico->fetch_assoc()['total'] == 0) {
+    $password_hash = password_hash('medico123', PASSWORD_DEFAULT);
+    $conexion->query("INSERT INTO usuarios (usuario, password, nombre, rol) VALUES ('medico', '$password_hash', 'Dr. Carlos López', 'medico')");
+    error_log("Usuario medico creado automáticamente");
+}
+
+// Crear usuario secretaria por defecto si no existe
+$verificar_secretaria = $conexion->query("SELECT COUNT(*) as total FROM usuarios WHERE usuario = 'secretaria'");
+if ($verificar_secretaria && $verificar_secretaria->fetch_assoc()['total'] == 0) {
+    $password_hash = password_hash('secretaria123', PASSWORD_DEFAULT);
+    $conexion->query("INSERT INTO usuarios (usuario, password, nombre, rol) VALUES ('secretaria', '$password_hash', 'Ana González', 'secretaria')");
+    error_log("Usuario secretaria creado automáticamente");
+}
+
+// Crear usuario doctor1 por defecto si no existe (opcional)
+$verificar_doctor1 = $conexion->query("SELECT COUNT(*) as total FROM usuarios WHERE usuario = 'doctor1'");
+if ($verificar_doctor1 && $verificar_doctor1->fetch_assoc()['total'] == 0) {
+    $password_hash = password_hash('doctor123', PASSWORD_DEFAULT);
+    $conexion->query("INSERT INTO usuarios (usuario, password, nombre, rol) VALUES ('doctor1', '$password_hash', 'Dr. Juan Pérez', 'medico')");
+    error_log("Usuario doctor1 creado automáticamente");
+}
+
+// Verificar y actualizar contraseñas de usuarios existentes (por si tienen texto plano)
+$usuarios_existentes = $conexion->query("SELECT usuario, password FROM usuarios");
+while ($usuario = $usuarios_existentes->fetch_assoc()) {
+    // Si la contraseña es muy corta (probablemente texto plano), la actualizamos
+    if (strlen($usuario['password']) < 50) {
+        $nueva_password = '';
+        
+        // Asignar contraseña según el usuario
+        switch($usuario['usuario']) {
+            case 'admin':
+                $nueva_password = 'admin123';
+                break;
+            case 'medico':
+            case 'doctor1':
+                $nueva_password = 'medico123';
+                break;
+            case 'secretaria':
+                $nueva_password = 'secretaria123';
+                break;
+            default:
+                $nueva_password = 'password123'; // Contraseña por defecto
+        }
+        
+        $password_hash = password_hash($nueva_password, PASSWORD_DEFAULT);
+        $conexion->query("UPDATE usuarios SET password = '$password_hash' WHERE usuario = '{$usuario['usuario']}'");
+        error_log("Contraseña actualizada para usuario: {$usuario['usuario']}");
+    }
 }
 
 // Insertar configuración básica si no existe
@@ -143,6 +201,8 @@ foreach ($config_basica as $config) {
 // Configurar MySQL para manejar errores
 mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 $conexion->set_charset("utf8mb4");
+
+// FUNCIONES DEL SISTEMA
 
 // FUNCIÓN PARA VERIFICAR SESIÓN SEGURA
 function verificarSesion() {
@@ -245,6 +305,110 @@ function debug($mensaje) {
 
 // Configuración de zona horaria
 date_default_timezone_set('America/El_Salvador');
+
+// FUNCIONES DE ROLES
+// NOTA: Asegúrate de que el archivo roles_simple.php exista en el directorio includes/
+// Si no existe, crear una versión básica
+
+// Verificar si el archivo de roles existe, si no, crear funciones básicas
+if (!function_exists('miRol')) {
+    // Si roles_simple.php no existe, definimos funciones básicas
+    function miRol() {
+        return $_SESSION['rol'] ?? 'secretaria';
+    }
+    
+    function nombreMiRol() {
+        $roles = [
+            'admin' => 'Administrador',
+            'medico' => 'Médico',
+            'secretaria' => 'Secretaria'
+        ];
+        $rol = miRol();
+        return $roles[$rol] ?? 'Secretaria';
+    }
+    
+    function puedoVerPacientes() {
+        $rol = miRol();
+        return in_array($rol, ['admin', 'medico', 'secretaria']);
+    }
+    
+    function puedoVerHistorial() {
+        $rol = miRol();
+        return in_array($rol, ['admin', 'medico']);
+    }
+    
+    function puedoGestionarAgenda() {
+        $rol = miRol();
+        return in_array($rol, ['admin', 'medico', 'secretaria']);
+    }
+    
+    function puedoVerEstadisticas() {
+        $rol = miRol();
+        return in_array($rol, ['admin', 'medico']);
+    }
+    
+    function puedoGestionarUsuarios() {
+        $rol = miRol();
+        return $rol === 'admin';
+    }
+    
+    function puedoAccederConfiguracion() {
+        $rol = miRol();
+        return $rol === 'admin';
+    }
+    
+    function puedoCrearConsultas() {
+        $rol = miRol();
+        return in_array($rol, ['admin', 'medico']);
+    }
+} else {
+    // Si el archivo existe, lo incluimos
+    require_once 'includes/roles_simple.php';
+}
+
+// FUNCIÓN PARA OBTENER INFORMACIÓN DEL USUARIO ACTUAL
+function obtenerUsuarioActual() {
+    return [
+        'id' => $_SESSION['usuario_id'] ?? null,
+        'nombre' => $_SESSION['usuario'] ?? 'Usuario',
+        'rol' => $_SESSION['rol'] ?? 'secretaria',
+        'nombre_rol' => nombreMiRol()
+    ];
+}
+
+// FUNCIÓN PARA VERIFICAR ACCESO A MÓDULOS
+function verificarAcceso($modulo) {
+    // Iniciar sesión si no está iniciada
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+    
+    // Verificar que el usuario esté logueado
+    if (!isset($_SESSION['logueado']) || $_SESSION['logueado'] !== true) {
+        header('Location: index.php');
+        exit;
+    }
+    
+    $rol = miRol();
+    
+    $permisos = [
+        'pacientes' => puedoVerPacientes(),
+        'historial' => puedoVerHistorial(),
+        'agenda' => puedoGestionarAgenda(),
+        'estadisticas' => puedoVerEstadisticas(),
+        'usuarios' => puedoGestionarUsuarios(),
+        'configuracion' => puedoAccederConfiguracion(),
+        'consultas' => puedoCrearConsultas()
+    ];
+    
+    if (!isset($permisos[$modulo]) || !$permisos[$modulo]) {
+        $_SESSION['error'] = 'No tienes permiso para acceder a esta sección';
+        header('Location: dashboard.php');
+        exit;
+    }
+    
+    return true;
+}
 
 // Mensaje de inicio (solo en desarrollo)
 debug("Config.php cargado correctamente - Base: $basedatos");

@@ -1,0 +1,119 @@
+/* Estilos para impresión */
+@media print {
+    /* Ocultar elementos no deseados */
+    .navbar,
+    .sidebar,
+    .btn,
+    .no-print,
+    .footer,
+    .alert,
+    .breadcrumb,
+    .pagination {
+        display: none !important;
+    }
+    
+    /* Mostrar solo el contenido principal */
+    .container,
+    .container-fluid,
+    .main-content {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        float: none !important;
+    }
+    
+    /* Estilos base */
+    body {
+        font-family: "Times New Roman", Times, serif !important;
+        font-size: 12pt !important;
+        line-height: 1.5 !important;
+        color: #000 !important;
+        background: #fff !important;
+        margin: 1cm !important;
+    }
+    
+    /* Mejorar legibilidad */
+    h1, h2, h3, h4, h5, h6 {
+        page-break-after: avoid;
+        color: #000 !important;
+    }
+    
+    /* Evitar cortes en elementos */
+    table, .card, .row, .col {
+        page-break-inside: avoid;
+    }
+    
+    /* Mostar enlaces como texto */
+    a {
+        color: #000 !important;
+        text-decoration: underline !important;
+    }
+    
+    a[href]:after {
+        content: " (" attr(href) ")";
+        font-size: 10pt;
+        color: #666;
+    }
+    
+    /* Para tablas */
+    .table {
+        border-collapse: collapse !important;
+        width: 100% !important;
+    }
+    
+    .table th,
+    .table td {
+        border: 1px solid #000 !important;
+        padding: 4px !important;
+    }
+    
+    /* Para impresión de recetas específicas */
+    .receta-print {
+        border: 2px solid #000 !important;
+        padding: 20px !important;
+        margin: 20px 0 !important;
+    }
+    
+    /* Encabezado en cada página (opcional) */
+    @page {
+        margin: 2cm;
+        @top-center {
+            content: "Clinica Simple - Historial Clínico";
+            font-size: 10pt;
+            color: #666;
+        }
+        @bottom-center {
+            content: "Página " counter(page) " de " counter(pages);
+            font-size: 10pt;
+            color: #666;
+        }
+    }
+    
+    /* Primera página sin encabezado */
+    @page :first {
+        @top-center {
+            content: "";
+        }
+    }
+}
+
+/* Clase para ocultar en impresión */
+.no-print {
+    display: block;
+}
+
+@media print {
+    .no-print {
+        display: none !important;
+    }
+    
+    /* Clase para mostrar solo en impresión */
+    .only-print {
+        display: block !important;
+    }
+}
+
+.only-print {
+    display: none;
+}

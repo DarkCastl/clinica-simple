@@ -1,5 +1,5 @@
 <?php
-// menu_lateral.php - VERSIÓN MODERNA Y MINIMALISTA
+// menu_lateral.php 
 $usuario_actual = isset($_SESSION['usuario']) ? $_SESSION['usuario'] : 'Usuario';
 $inicial_usuario = strtoupper(substr($usuario_actual, 0, 1));
 $pagina_actual = basename($_SERVER['PHP_SELF']);
@@ -468,7 +468,7 @@ $pagina_actual = basename($_SERVER['PHP_SELF']);
     <nav id="sidebar">
         <!-- HEADER -->
         <div class="sidebar-header">
-            <div class="logo-icon">
+            <div class="clinica-simple.png">
                 <i class="bi bi-heart"></i>
             </div>
             <div>
