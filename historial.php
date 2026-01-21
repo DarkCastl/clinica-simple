@@ -132,10 +132,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $agenda_id = isset($_POST['agenda_id']) ? intval($_POST['agenda_id']) : null;
         
         if ($paciente_id_post > 0 && !empty($fecha) && !empty($motivo)) {
-            // Preparar consulta con todos los campos
+            // Preparar consulta con todos los campos - CORREGIDO
             $sql = "INSERT INTO historial (
                 paciente_id, fecha, motivo, diagnostico, tratamiento, 
-                medicamentos_recetados, indicaciones_paciente, observaciones,
+                medicamentos, indicaciones, observaciones_adicionales,
                 agenda_id, usuario_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
             
@@ -207,9 +207,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $indicaciones = trim($_POST['indicaciones']);
         $observaciones = trim($_POST['observaciones']);
         
+        // CORREGIDO - usando los nombres correctos de campos
         $sql = "UPDATE historial SET 
-                fecha = ?, motivo = ?, diagnostico = ?, tratamiento = ?, 
-                medicamentos_recetados = ?, indicaciones_paciente = ?, observaciones = ?
+                fecha = ?, motivo = ?, diagnóstico = ?, tratamiento = ?, 
+                medicamentos = ?, indicaciones = ?, observaciones_adicionales = ?
                 WHERE id = ?";
         
         $stmt = $conexion->prepare($sql);
@@ -465,12 +466,12 @@ function generarPDFHistorial($conexion, $paciente_id) {
                 $pdf->Ln(2);
             }
             
-            // Diagnóstico
-            if (!empty($registro['diagnostico'])) {
+            // Diagnóstico - CORREGIDO
+            if (!empty($registro['diagnóstico'])) {
                 $pdf->SetFont('helvetica', 'B', 10);
                 $pdf->Cell(25, 6, 'Diagnóstico:', 0, 0);
                 $pdf->SetFont('helvetica', '', 10);
-                $pdf->MultiCell(0, 6, htmlspecialchars($registro['diagnostico']), 0, 'L');
+                $pdf->MultiCell(0, 6, htmlspecialchars($registro['diagnóstico']), 0, 'L');
                 $pdf->Ln(2);
             }
             
@@ -483,8 +484,8 @@ function generarPDFHistorial($conexion, $paciente_id) {
                 $pdf->Ln(2);
             }
             
-            // Medicamentos Recetados (si hay - para recetas)
-            if (!empty($registro['medicamentos_recetados'])) {
+            // Medicamentos Recetados (si hay - para recetas) - CORREGIDO
+            if (!empty($registro['medicamentos'])) {
                 $pdf->SetFont('helvetica', 'B', 10);
                 $pdf->SetTextColor(220, 53, 69); // Rojo para destacar recetas
                 $pdf->Cell(0, 6, 'RECETA MÉDICA:', 0, 1);
@@ -493,25 +494,25 @@ function generarPDFHistorial($conexion, $paciente_id) {
                 
                 // Fondo para receta
                 $pdf->SetFillColor(255, 243, 243);
-                $pdf->MultiCell(0, 6, htmlspecialchars($registro['medicamentos_recetados']), 1, 'L', true);
+                $pdf->MultiCell(0, 6, htmlspecialchars($registro['medicamentos']), 1, 'L', true);
                 $pdf->Ln(2);
                 
-                // Indicaciones si hay
-                if (!empty($registro['indicaciones_paciente'])) {
+                // Indicaciones si hay - CORREGIDO
+                if (!empty($registro['indicaciones'])) {
                     $pdf->SetFont('helvetica', 'B', 10);
                     $pdf->Cell(0, 6, 'Indicaciones:', 0, 1);
                     $pdf->SetFont('helvetica', '', 10);
-                    $pdf->MultiCell(0, 6, htmlspecialchars($registro['indicaciones_paciente']), 0, 'L');
+                    $pdf->MultiCell(0, 6, htmlspecialchars($registro['indicaciones']), 0, 'L');
                     $pdf->Ln(2);
                 }
             }
             
-            // Observaciones
-            if (!empty($registro['observaciones'])) {
+            // Observaciones - CORREGIDO
+            if (!empty($registro['observaciones_adicionales'])) {
                 $pdf->SetFont('helvetica', 'B', 10);
                 $pdf->Cell(25, 6, 'Observaciones:', 0, 0);
                 $pdf->SetFont('helvetica', '', 10);
-                $pdf->MultiCell(0, 6, htmlspecialchars($registro['observaciones']), 0, 'L');
+                $pdf->MultiCell(0, 6, htmlspecialchars($registro['observaciones_adicionales']), 0, 'L');
                 $pdf->Ln(2);
             }
             
@@ -551,7 +552,7 @@ function generarPDFHistorial($conexion, $paciente_id) {
 function generarPDFReceta($conexion, $historial_id) {
     $historial_id = intval($historial_id);
     
-    // Obtener datos de la consulta
+    // Obtener datos de la consulta - CORREGIDO
     $sql = "SELECT h.*, p.nombre, p.dui, p.fecha_nacimiento, p.telefono, p.email,
                    DATE_FORMAT(h.fecha, '%d/%m/%Y') as fecha_formateada
             FROM historial h
@@ -574,10 +575,10 @@ function generarPDFReceta($conexion, $historial_id) {
         exit;
     }
     
-    // Verificar si tiene información para receta
-    if (empty($consulta['medicamentos_recetados']) && 
+    // Verificar si tiene información para receta - CORREGIDO
+    if (empty($consulta['medicamentos']) && 
         empty($consulta['tratamiento']) && 
-        empty($consulta['indicaciones_paciente'])) {
+        empty($consulta['indicaciones'])) {
         
         // PDF de advertencia
         $pdf = new TCPDF();
@@ -634,14 +635,14 @@ function generarPDFReceta($conexion, $historial_id) {
     $pdf->SetTextColor(0, 0, 0);
     $pdf->Ln(5);
     
-    // Medicamentos (lo más importante)
-    if (!empty($consulta['medicamentos_recetados'])) {
+    // Medicamentos (lo más importante) - CORREGIDO
+    if (!empty($consulta['medicamentos'])) {
         $pdf->SetFont('helvetica', 'B', 12);
         $pdf->Cell(0, 8, 'MEDICAMENTOS PRESCRITOS:', 0, 1);
         $pdf->SetFont('helvetica', '', 11);
         
         // Formatear medicamentos con viñetas
-        $medicamentos = explode("\n", $consulta['medicamentos_recetados']);
+        $medicamentos = explode("\n", $consulta['medicamentos']);
         foreach ($medicamentos as $med) {
             if (trim($med) != '') {
                 $pdf->Cell(5, 6, '•', 0, 0);
@@ -660,19 +661,19 @@ function generarPDFReceta($conexion, $historial_id) {
         $pdf->Ln(5);
     }
     
-    // Indicaciones
-    if (!empty($consulta['indicaciones_paciente'])) {
+    // Indicaciones - CORREGIDO
+    if (!empty($consulta['indicaciones'])) {
         $pdf->SetFont('helvetica', 'B', 12);
         $pdf->Cell(0, 8, 'INDICACIONES AL PACIENTE:', 0, 1);
         $pdf->SetFont('helvetica', '', 11);
-        $pdf->MultiCell(0, 6, htmlspecialchars($consulta['indicaciones_paciente']), 0, 'L');
+        $pdf->MultiCell(0, 6, htmlspecialchars($consulta['indicaciones']), 0, 'L');
         $pdf->Ln(5);
     }
     
     // Si no hay nada de lo anterior, mostrar mensaje
-    if (empty($consulta['medicamentos_recetados']) && 
+    if (empty($consulta['medicamentos']) && 
         empty($consulta['tratamiento']) && 
-        empty($consulta['indicaciones_paciente'])) {
+        empty($consulta['indicaciones'])) {
         
         $pdf->SetFont('helvetica', 'I', 12);
         $pdf->Cell(0, 10, 'Esta consulta no incluye prescripción médica específica.', 0, 1, 'C');
@@ -705,7 +706,7 @@ function generarPDFReceta($conexion, $historial_id) {
 function generarPDFRecetaDetalle($conexion, $historial_id) {
     $historial_id = intval($historial_id);
     
-    // Obtener datos de la consulta
+    // Obtener datos de la consulta - CORREGIDO
     $sql = "SELECT h.*, p.nombre, p.dui, p.fecha_nacimiento, p.telefono, p.email,
                    DATE_FORMAT(h.fecha, '%d/%m/%Y') as fecha_formateada
             FROM historial h
@@ -778,12 +779,12 @@ function generarPDFRecetaDetalle($conexion, $historial_id) {
         $pdf->Ln(5);
     }
     
-    // Diagnóstico
-    if (!empty($consulta['diagnostico'])) {
+    // Diagnóstico - CORREGIDO
+    if (!empty($consulta['diagnóstico'])) {
         $pdf->SetFont('helvetica', 'B', 12);
         $pdf->Cell(0, 8, 'DIAGNÓSTICO', 0, 1);
         $pdf->SetFont('helvetica', '', 11);
-        $pdf->MultiCell(0, 6, htmlspecialchars($consulta['diagnostico']), 0, 'L');
+        $pdf->MultiCell(0, 6, htmlspecialchars($consulta['diagnóstico']), 0, 'L');
         $pdf->Ln(5);
     }
     
@@ -795,13 +796,13 @@ function generarPDFRecetaDetalle($conexion, $historial_id) {
     $pdf->SetTextColor(0, 0, 0);
     $pdf->Ln(5);
     
-    // Medicamentos
-    if (!empty($consulta['medicamentos_recetados'])) {
+    // Medicamentos - CORREGIDO
+    if (!empty($consulta['medicamentos'])) {
         $pdf->SetFont('helvetica', 'B', 12);
         $pdf->Cell(0, 8, 'MEDICAMENTOS:', 0, 1);
         $pdf->SetFont('helvetica', '', 11);
         
-        $meds = explode("\n", $consulta['medicamentos_recetados']);
+        $meds = explode("\n", $consulta['medicamentos']);
         foreach ($meds as $med) {
             if (trim($med) != '') {
                 $pdf->Cell(5, 6, '•', 0, 0);
@@ -820,31 +821,31 @@ function generarPDFRecetaDetalle($conexion, $historial_id) {
         $pdf->Ln(5);
     }
     
-    // Indicaciones
-    if (!empty($consulta['indicaciones_paciente'])) {
+    // Indicaciones - CORREGIDO
+    if (!empty($consulta['indicaciones'])) {
         $pdf->SetFont('helvetica', 'B', 12);
         $pdf->Cell(0, 8, 'INDICACIONES:', 0, 1);
         $pdf->SetFont('helvetica', '', 11);
-        $pdf->MultiCell(0, 6, htmlspecialchars($consulta['indicaciones_paciente']), 0, 'L');
+        $pdf->MultiCell(0, 6, htmlspecialchars($consulta['indicaciones']), 0, 'L');
         $pdf->Ln(5);
     }
     
     // Si no hay receta
-    if (empty($consulta['medicamentos_recetados']) && 
+    if (empty($consulta['medicamentos']) && 
         empty($consulta['tratamiento']) && 
-        empty($consulta['indicaciones_paciente'])) {
+        empty($consulta['indicaciones'])) {
         
         $pdf->SetFont('helvetica', 'I', 12);
         $pdf->Cell(0, 10, 'Esta consulta no incluye prescripción médica.', 0, 1, 'C');
         $pdf->Ln(5);
     }
     
-    // Observaciones
-    if (!empty($consulta['observaciones'])) {
+    // Observaciones - CORREGIDO
+    if (!empty($consulta['observaciones_adicionales'])) {
         $pdf->SetFont('helvetica', 'B', 12);
         $pdf->Cell(0, 8, 'OBSERVACIONES:', 0, 1);
         $pdf->SetFont('helvetica', '', 11);
-        $pdf->MultiCell(0, 6, htmlspecialchars($consulta['observaciones']), 0, 'L');
+        $pdf->MultiCell(0, 6, htmlspecialchars($consulta['observaciones_adicionales']), 0, 'L');
     }
     
     $pdf->Ln(15);
@@ -1198,7 +1199,7 @@ function generarPDFRecetaDetalle($conexion, $historial_id) {
                                                 <label class="form-label campo-label">Diagnóstico</label>
                                                 <textarea name="diagnostico" class="form-control" rows="2" 
                                                           placeholder="Escriba el diagnóstico médico..."><?php 
-                                                if ($registro_editar) echo htmlspecialchars($registro_editar['diagnostico']);
+                                                if ($registro_editar) echo htmlspecialchars($registro_editar['diagnóstico']);
                                                 ?></textarea>
                                             </div>
                                         </div>
@@ -1219,7 +1220,7 @@ function generarPDFRecetaDetalle($conexion, $historial_id) {
 Ejemplo:
 - Ibuprofeno 400mg: 1 cada 8 horas
 - Amoxicilina 500mg: 1 cada 12 horas"><?php 
-                                                if ($registro_editar) echo htmlspecialchars($registro_editar['medicamentos_recetados']);
+                                                if ($registro_editar) echo htmlspecialchars($registro_editar['medicamentos']);
                                                 ?></textarea>
                                             </div>
                                             
@@ -1227,7 +1228,7 @@ Ejemplo:
                                                 <label class="form-label campo-label">Indicaciones al Paciente</label>
                                                 <textarea name="indicaciones" class="form-control" rows="2" 
                                                           placeholder="Recomendaciones, cuidados, reposo..."><?php 
-                                                if ($registro_editar) echo htmlspecialchars($registro_editar['indicaciones_paciente']);
+                                                if ($registro_editar) echo htmlspecialchars($registro_editar['indicaciones']);
                                                 ?></textarea>
                                             </div>
                                         </div>
@@ -1237,7 +1238,7 @@ Ejemplo:
                                         <label class="form-label campo-label">Observaciones Adicionales</label>
                                         <textarea name="observaciones" class="form-control" rows="2" 
                                                   placeholder="Notas adicionales..."><?php 
-                                        if ($registro_editar) echo htmlspecialchars($registro_editar['observaciones']);
+                                        if ($registro_editar) echo htmlspecialchars($registro_editar['observaciones_adicionales']);
                                         ?></textarea>
                                     </div>
                                     
@@ -1285,10 +1286,10 @@ Ejemplo:
                                 <?php else: ?>
                                     <?php 
                                     while($registro = $historial->fetch_assoc()): 
-                                        // Determinar si tiene receta
-                                        $tiene_receta = !empty($registro['medicamentos_recetados']) || 
+                                        // Determinar si tiene receta - CORREGIDO
+                                        $tiene_receta = !empty($registro['medicamentos']) || 
                                                         !empty($registro['tratamiento']) || 
-                                                        !empty($registro['indicaciones_paciente']);
+                                                        !empty($registro['indicaciones']);
                                     ?>
                                     <div class="historial-card p-3 mb-3 <?php echo $tiene_receta ? 'historial-receta' : ''; ?>">
                                         <div class="d-flex justify-content-between align-items-start mb-2">
@@ -1341,10 +1342,10 @@ Ejemplo:
                                             </div>
                                         </div>
                                         
-                                        <?php if (!empty($registro['diagnostico'])): ?>
+                                        <?php if (!empty($registro['diagnóstico'])): ?>
                                         <div class="mb-2">
                                             <h6 class="mb-1 campo-label">Diagnóstico:</h6>
-                                            <p class="mb-0"><?php echo nl2br(htmlspecialchars($registro['diagnostico'])); ?></p>
+                                            <p class="mb-0"><?php echo nl2br(htmlspecialchars($registro['diagnóstico'])); ?></p>
                                         </div>
                                         <?php endif; ?>
                                         
@@ -1355,25 +1356,25 @@ Ejemplo:
                                         </div>
                                         <?php endif; ?>
                                         
-                                        <?php if (!empty($registro['medicamentos_recetados'])): ?>
+                                        <?php if (!empty($registro['medicamentos'])): ?>
                                         <div class="mb-2">
                                             <h6 class="mb-1 campo-label">Medicamentos Recetados:</h6>
                                             <div class="receta-medicamentos">
-                                                <p class="mb-0"><?php echo nl2br(htmlspecialchars($registro['medicamentos_recetados'])); ?></p>
-                                                <?php if (!empty($registro['indicaciones_paciente'])): ?>
+                                                <p class="mb-0"><?php echo nl2br(htmlspecialchars($registro['medicamentos'])); ?></p>
+                                                <?php if (!empty($registro['indicaciones'])): ?>
                                                 <hr class="my-2">
                                                 <small class="text-muted">
-                                                    <strong>Indicaciones:</strong> <?php echo nl2br(htmlspecialchars($registro['indicaciones_paciente'])); ?>
+                                                    <strong>Indicaciones:</strong> <?php echo nl2br(htmlspecialchars($registro['indicaciones'])); ?>
                                                 </small>
                                                 <?php endif; ?>
                                             </div>
                                         </div>
                                         <?php endif; ?>
                                         
-                                        <?php if (!empty($registro['observaciones'])): ?>
+                                        <?php if (!empty($registro['observaciones_adicionales'])): ?>
                                         <div class="mb-2">
                                             <h6 class="mb-1 campo-label">Observaciones:</h6>
-                                            <p class="mb-0"><?php echo nl2br(htmlspecialchars($registro['observaciones'])); ?></p>
+                                            <p class="mb-0"><?php echo nl2br(htmlspecialchars($registro['observaciones_adicionales'])); ?></p>
                                         </div>
                                         <?php endif; ?>
                                         

@@ -1,7 +1,13 @@
 <?php
 // crear_consulta.php - FORMULARIO PARA CREAR CONSULTA DESDE CITA
+session_start();
 require_once 'config.php';
-verificarSesion();
+
+// Verificar sesión
+if (!isset($_SESSION['logueado']) || $_SESSION['logueado'] !== true) {
+    header('Location: index.php');
+    exit;
+}
 
 $cita_id = $_GET['cita_id'] ?? 0;
 $paciente_id = $_GET['paciente_id'] ?? 0;
@@ -11,19 +17,23 @@ if (!$cita_id || !$paciente_id) {
     exit;
 }
 
-// Obtener datos de la cita y paciente
-$sql = "SELECT a.*, p.nombre as paciente_nombre, p.telefono, p.email 
+// Obtener datos de la cita y paciente - INCLUYENDO doctor_id
+$sql = "SELECT a.*, p.nombre as paciente_nombre, p.telefono, p.email, 
+               u.nombre as doctor_nombre, u.id as doctor_id
         FROM agenda a 
         JOIN pacientes p ON a.paciente_id = p.id 
-        WHERE a.id = ? AND a.paciente_id = ? AND a.estado = 'pendiente'";
+        LEFT JOIN usuarios u ON a.doctor_id = u.id
+        WHERE a.id = ? AND a.paciente_id = ? 
+        AND (a.estado = 'pendiente' OR a.estado = 'confirmada')";
 $stmt = $conexion->prepare($sql);
 $stmt->bind_param("ii", $cita_id, $paciente_id);
 $stmt->execute();
-$cita = $stmt->get_result()->fetch_assoc();
+$result = $stmt->get_result();
+$cita = $result->fetch_assoc();
 $stmt->close();
 
 if (!$cita) {
-    echo "<script>alert('Cita no encontrada o ya fue atendida'); window.location='agenda.php';</script>";
+    echo "<script>alert('Cita no encontrada, ya fue atendida o está cancelada'); window.location='agenda.php';</script>";
     exit;
 }
 
@@ -43,20 +53,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['guardar_consulta'])) 
     $conexion->begin_transaction();
     
     try {
-        // 1. Insertar en historial
-        $sql_historial = "INSERT INTO historial (paciente_id, fecha, motivo, diagnostico, tratamiento, medicamentos, indicaciones, observaciones) 
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
-        $stmt = $conexion->prepare($sql_historial);
-        $stmt->bind_param("isssssss", 
-            $paciente_id, 
-            $fecha_consulta,
-            $motivo,
-            $diagnostico,
-            $tratamiento,
-            $medicamentos,
-            $indicaciones,
-            $observaciones
-        );
+        // 1. Primero, verificar si la tabla se llama 'historial' o 'historial_consultas'
+        // Puedes verificar así:
+        $tabla_historial = 'historial'; // Cambia esto según tu BD
+        
+        // Intentar con 'historial' primero, si no funciona, probar con 'historial_consultas'
+        $sql_check = "SHOW TABLES LIKE 'historial_consultas'";
+        $result_check = $conexion->query($sql_check);
+        if ($result_check->num_rows > 0) {
+            $tabla_historial = 'historial_consultas';
+        }
+        
+        // 2. Insertar en historial (ajusta según tu estructura real)
+        if ($tabla_historial == 'historial') {
+            $sql_historial = "INSERT INTO historial 
+                             (paciente_id, fecha, motivo, diagnostico, tratamiento, medicamentos, indicaciones, observaciones) 
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+            $stmt = $conexion->prepare($sql_historial);
+            $stmt->bind_param("isssssss", 
+                $paciente_id, 
+                $fecha_consulta,
+                $motivo,
+                $diagnostico,
+                $tratamiento,
+                $medicamentos,
+                $indicaciones,
+                $observaciones
+            );
+        } else {
+            // Para historial_consultas con doctor_id
+            $sql_historial = "INSERT INTO historial_consultas 
+                             (paciente_id, doctor_id, fecha_consulta, motivo_consulta, 
+                              diagnostico, tratamiento, medicamentos, indicaciones, observaciones, agenda_id) 
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            $stmt = $conexion->prepare($sql_historial);
+            $stmt->bind_param("iisssssssi", 
+                $paciente_id, 
+                $cita['doctor_id'],
+                $fecha_consulta,
+                $motivo,
+                $diagnostico,
+                $tratamiento,
+                $medicamentos,
+                $indicaciones,
+                $observaciones,
+                $cita_id
+            );
+        }
         
         if (!$stmt->execute()) {
             throw new Exception("Error al crear consulta: " . $stmt->error);
@@ -65,11 +108,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['guardar_consulta'])) 
         $historial_id = $conexion->insert_id;
         $stmt->close();
         
-        // 2. Actualizar agenda (marcar como completada)
-       $sql_agenda = "UPDATE agenda SET estado = 'completada', historial_id = ? WHERE id = ?";
-
+        // 3. Actualizar agenda (marcar como completada)
+        // Si tu tabla agenda tiene columna historial_id, úsala
+        $sql_agenda = "UPDATE agenda SET estado = 'completada' WHERE id = ?";
+        
         $stmt = $conexion->prepare($sql_agenda);
-        $stmt->bind_param("ii", $historial_id, $cita_id);
+        $stmt->bind_param("i", $cita_id);
         
         if (!$stmt->execute()) {
             throw new Exception("Error al actualizar cita: " . $stmt->error);
@@ -79,9 +123,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['guardar_consulta'])) 
         // Confirmar transacción
         $conexion->commit();
         
-        // Redirigir al historial del paciente
-        header("Location: historial.php?paciente_id=$paciente_id&mensaje=consulta_creada");
-        exit;
+        // Mostrar mensaje de éxito
+        $mensaje = '<div class="alert alert-success">✅ Consulta creada exitosamente</div>';
+        
+        // Redirigir después de 2 segundos
+        echo '<script>
+            setTimeout(function() {
+                window.location.href = "historial.php?paciente_id=' . $paciente_id . '&mensaje=consulta_creada";
+            }, 2000);
+        </script>';
         
     } catch (Exception $e) {
         $conexion->rollback();
@@ -130,15 +180,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['guardar_consulta'])) 
                         </div>
                         <div class="card-body">
                             <div class="row">
-                                <div class="col-md-4">
+                                <div class="col-md-3">
                                     <p><strong>Paciente:</strong><br>
                                     <?php echo htmlspecialchars($cita['paciente_nombre']); ?></p>
                                 </div>
-                                <div class="col-md-4">
+                                <div class="col-md-3">
+                                    <p><strong>Doctor:</strong><br>
+                                    <?php echo htmlspecialchars($cita['doctor_nombre'] ?? 'No asignado'); ?></p>
+                                </div>
+                                <div class="col-md-3">
                                     <p><strong>Fecha de Cita:</strong><br>
                                     <?php echo date('d/m/Y', strtotime($cita['fecha'])); ?></p>
                                 </div>
-                                <div class="col-md-4">
+                                <div class="col-md-3">
                                     <p><strong>Hora:</strong><br>
                                     <?php echo date('H:i', strtotime($cita['hora'])); ?></p>
                                 </div>

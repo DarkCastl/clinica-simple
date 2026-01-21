@@ -1,5 +1,5 @@
 <?php
-// dashboard.php - PANEL DE CONTROL PRINCIPAL CON LOGO
+// dashboard.php - PANEL DE CONTROL CON ESTADÍSTICAS REALES
 session_start();
 require_once 'config.php';
 
@@ -9,22 +9,239 @@ if (!isset($_SESSION['logueado']) || $_SESSION['logueado'] !== true) {
     exit;
 }
 
-// Obtener estadísticas para el dashboard
-$total_pacientes = $conexion->query("SELECT COUNT(*) as total FROM pacientes")->fetch_assoc()['total'];
-$total_consultas = $conexion->query("SELECT COUNT(*) as total FROM historial")->fetch_assoc()['total'];
-$pacientes_hoy = $conexion->query("SELECT COUNT(*) as total FROM pacientes WHERE DATE(fecha_registro) = CURDATE()")->fetch_assoc()['total'];
-$consultas_hoy = $conexion->query("SELECT COUNT(*) as total FROM historial WHERE fecha = CURDATE()")->fetch_assoc()['total'];
-$citas_hoy = $conexion->query("SELECT COUNT(*) as total FROM agenda WHERE fecha = CURDATE() AND estado = 'pendiente'")->fetch_assoc()['total'];
+// ========== ESTADÍSTICAS REALES Y ACTUALIZADAS ==========
 
-// Obtener últimas actividades
-$actividades = $conexion->query("
-    SELECT 'Paciente registrado' as tipo, nombre, fecha_registro as fecha 
+// 1. TOTAL PACIENTES (exactos)
+$total_pacientes = $conexion->query("SELECT COUNT(*) as total FROM pacientes")->fetch_assoc()['total'];
+
+// 2. TOTAL CONSULTAS (del historial)
+$total_consultas = $conexion->query("SELECT COUNT(*) as total FROM historial")->fetch_assoc()['total'];
+
+// 3. PACIENTES HOY (fecha_registro puede ser DATE o DATETIME)
+$pacientes_hoy_result = $conexion->query("
+    SELECT COUNT(*) as total 
     FROM pacientes 
-    UNION ALL
-    SELECT 'Consulta registrada' as tipo, '' as nombre, fecha as fecha 
-    FROM historial
-    ORDER BY fecha DESC LIMIT 5
+    WHERE DATE(fecha_registro) = CURDATE()
 ");
+$pacientes_hoy = $pacientes_hoy_result ? $pacientes_hoy_result->fetch_assoc()['total'] : 0;
+
+// 4. CONSULTAS HOY (del historial, campo fecha)
+$consultas_hoy_result = $conexion->query("
+    SELECT COUNT(*) as total 
+    FROM historial 
+    WHERE DATE(fecha) = CURDATE()
+");
+$consultas_hoy = $consultas_hoy_result ? $consultas_hoy_result->fetch_assoc()['total'] : 0;
+
+// 5. CITAS HOY (de la agenda, estado pendiente)
+$citas_hoy_result = $conexion->query("
+    SELECT COUNT(*) as total 
+    FROM agenda 
+    WHERE DATE(fecha) = CURDATE() 
+    AND estado = 'pendiente'
+");
+$citas_hoy = $citas_hoy_result ? $citas_hoy_result->fetch_assoc()['total'] : 0;
+
+// 6. ESTADÍSTICAS ADICIONALES PARA DASHBOARD
+
+// Consultas por mes (últimos 6 meses) - con verificación
+$consultas_mes = $conexion->query("
+    SELECT 
+        DATE_FORMAT(fecha, '%Y-%m') as mes,
+        COUNT(*) as total
+    FROM historial 
+    WHERE fecha >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+    GROUP BY DATE_FORMAT(fecha, '%Y-%m')
+    ORDER BY mes DESC
+    LIMIT 6
+") ?: null;
+
+// Pacientes por mes (últimos 6 meses) - con verificación
+$pacientes_mes = $conexion->query("
+    SELECT 
+        DATE_FORMAT(fecha_registro, '%Y-%m') as mes,
+        COUNT(*) as total
+    FROM pacientes 
+    WHERE fecha_registro >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+    GROUP BY DATE_FORMAT(fecha_registro, '%Y-%m')
+    ORDER BY mes DESC
+    LIMIT 6
+") ?: null;
+
+// Pacientes sin consultas (últimos 30 días) - con verificación
+$pacientes_sin_consulta = $conexion->query("
+    SELECT p.id, p.nombre, p.dui, p.telefono
+    FROM pacientes p
+    LEFT JOIN historial h ON p.id = h.paciente_id
+    WHERE h.id IS NULL
+    ORDER BY p.fecha_registro DESC
+    LIMIT 5
+") ?: null;
+
+// Consultas recientes (últimas 5) - con verificación
+$consultas_recientes = $conexion->query("
+    SELECT h.*, p.nombre, p.dui, 
+           DATE_FORMAT(h.fecha, '%d/%m/%Y') as fecha_formateada,
+           DATE_FORMAT(h.fecha_hora_creacion, '%H:%i') as hora
+    FROM historial h
+    INNER JOIN pacientes p ON h.paciente_id = p.id
+    ORDER BY h.fecha DESC, h.fecha_hora_creacion DESC
+    LIMIT 5
+") ?: null;
+
+// Citas próximas (próximos 3 días) - con verificación
+$citas_proximas = $conexion->query("
+    SELECT a.*, p.nombre, p.dui, p.telefono,
+           CONCAT(TIME_FORMAT(a.hora, '%H:%i'), ' - ', a.motivo) as descripcion
+    FROM agenda a
+    LEFT JOIN pacientes p ON a.paciente_id = p.id
+    WHERE a.fecha >= CURDATE() 
+    AND a.fecha <= DATE_ADD(CURDATE(), INTERVAL 3 DAY)
+    AND a.estado = 'pendiente'
+    ORDER BY a.fecha ASC, a.hora ASC
+    LIMIT 5
+") ?: null;
+
+// Edad promedio de pacientes (solo si existe fecha_nacimiento)
+$edad_promedio = array('edad_promedio' => 0, 'edad_minima' => 0, 'edad_maxima' => 0);
+try {
+    $result = $conexion->query("
+        SELECT 
+            ROUND(AVG(TIMESTAMPDIFF(YEAR, fecha_nacimiento, CURDATE())), 1) as edad_promedio,
+            MIN(TIMESTAMPDIFF(YEAR, fecha_nacimiento, CURDATE())) as edad_minima,
+            MAX(TIMESTAMPDIFF(YEAR, fecha_nacimiento, CURDATE())) as edad_maxima
+        FROM pacientes 
+        WHERE fecha_nacimiento IS NOT NULL 
+        AND fecha_nacimiento != '0000-00-00'
+        AND fecha_nacimiento != ''
+    ");
+    if ($result && $result->num_rows > 0) {
+        $edad_promedio = $result->fetch_assoc();
+    }
+} catch (Exception $e) {
+    // Si no existe fecha_nacimiento, usar valores por defecto
+    $edad_promedio = array('edad_promedio' => 0, 'edad_minima' => 0, 'edad_maxima' => 0);
+}
+
+// ========== ESTADÍSTICAS PARA GRÁFICOS ==========
+
+// Consultas por día (últimos 7 días)
+$consultas_ultimos_7dias = $conexion->query("
+    SELECT 
+        DATE(fecha) as dia,
+        COUNT(*) as total
+    FROM historial
+    WHERE fecha >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+    GROUP BY DATE(fecha)
+    ORDER BY dia ASC
+") ?: null;
+
+// Pacientes nuevos por día (últimos 7 días)
+$pacientes_ultimos_7dias = $conexion->query("
+    SELECT 
+        DATE(fecha_registro) as dia,
+        COUNT(*) as total
+    FROM pacientes
+    WHERE fecha_registro >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+    GROUP BY DATE(fecha_registro)
+    ORDER BY dia ASC
+") ?: null;
+
+// Obtener actividad reciente combinada
+$actividades = $conexion->query("
+    (
+        SELECT 
+            'paciente' as tipo,
+            CONCAT('Paciente registrado: ', nombre) as descripcion,
+            fecha_registro as fecha,
+            id as id_paciente,
+            NULL as id_historial
+        FROM pacientes
+        ORDER BY fecha_registro DESC
+        LIMIT 3
+    )
+    UNION ALL
+    (
+        SELECT 
+            'consulta' as tipo,
+            CONCAT('Consulta registrada') as descripcion,
+            fecha_hora_creacion as fecha,
+            paciente_id as id_paciente,
+            id as id_historial
+        FROM historial
+        ORDER BY fecha_hora_creacion DESC
+        LIMIT 3
+    )
+    UNION ALL
+    (
+        SELECT 
+            'cita' as tipo,
+            CONCAT('Cita programada: ', motivo) as descripcion,
+            CONCAT(fecha, ' ', hora) as fecha,
+            paciente_id as id_paciente,
+            NULL as id_historial
+        FROM agenda
+        WHERE estado = 'pendiente'
+        ORDER BY fecha DESC, hora DESC
+        LIMIT 3
+    )
+    ORDER BY fecha DESC
+    LIMIT 8
+") ?: null;
+
+// Mes actual y anterior para comparativas
+$mes_actual = date('Y-m');
+$mes_anterior = date('Y-m', strtotime('-1 month'));
+
+// Consultas este mes
+$consultas_mes_actual_result = $conexion->query("
+    SELECT COUNT(*) as total 
+    FROM historial 
+    WHERE DATE_FORMAT(fecha, '%Y-%m') = '$mes_actual'
+");
+$consultas_mes_actual = $consultas_mes_actual_result ? $consultas_mes_actual_result->fetch_assoc()['total'] : 0;
+
+// Consultas mes anterior
+$consultas_mes_anterior_result = $conexion->query("
+    SELECT COUNT(*) as total 
+    FROM historial 
+    WHERE DATE_FORMAT(fecha, '%Y-%m') = '$mes_anterior'
+");
+$consultas_mes_anterior = $consultas_mes_anterior_result ? $consultas_mes_anterior_result->fetch_assoc()['total'] : 0;
+
+// Calcular diferencia porcentual
+$diferencia_consultas = 0;
+if ($consultas_mes_anterior > 0 && $consultas_mes_actual > 0) {
+    $diferencia_consultas = round((($consultas_mes_actual - $consultas_mes_anterior) / $consultas_mes_anterior) * 100, 1);
+}
+
+// Pacientes este mes
+$pacientes_mes_actual_result = $conexion->query("
+    SELECT COUNT(*) as total 
+    FROM pacientes 
+    WHERE DATE_FORMAT(fecha_registro, '%Y-%m') = '$mes_actual'
+");
+$pacientes_mes_actual = $pacientes_mes_actual_result ? $pacientes_mes_actual_result->fetch_assoc()['total'] : 0;
+
+// Pacientes mes anterior
+$pacientes_mes_anterior_result = $conexion->query("
+    SELECT COUNT(*) as total 
+    FROM pacientes 
+    WHERE DATE_FORMAT(fecha_registro, '%Y-%m') = '$mes_anterior'
+");
+$pacientes_mes_anterior = $pacientes_mes_anterior_result ? $pacientes_mes_anterior_result->fetch_assoc()['total'] : 0;
+
+// Calcular diferencia porcentual
+$diferencia_pacientes = 0;
+if ($pacientes_mes_anterior > 0 && $pacientes_mes_actual > 0) {
+    $diferencia_pacientes = round((($pacientes_mes_actual - $pacientes_mes_anterior) / $pacientes_mes_anterior) * 100, 1);
+}
+
+// Contar pacientes sin consultas
+$pacientes_sin_consulta_count = 0;
+if ($pacientes_sin_consulta) {
+    $pacientes_sin_consulta_count = $pacientes_sin_consulta->num_rows;
+}
 ?>
 
 <!DOCTYPE html>
@@ -39,6 +256,9 @@ $actividades = $conexion->query("
     
     <!-- Bootstrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    
+    <!-- Chart.js para gráficos -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     <!-- Estilos adicionales para dashboard -->
     <style>
@@ -182,6 +402,7 @@ $actividades = $conexion->query("
             transition: transform 0.3s ease;
             border-top: 4px solid;
             height: 100%;
+            position: relative;
         }
         
         .stat-card:hover {
@@ -205,6 +426,40 @@ $actividades = $conexion->query("
             font-weight: 700;
             color: var(--primary-color);
             line-height: 1;
+        }
+        
+        .stat-trend {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 12px;
+        }
+        
+        .trend-up {
+            background: rgba(46, 204, 113, 0.1);
+            color: #27ae60;
+        }
+        
+        .trend-down {
+            background: rgba(231, 76, 60, 0.1);
+            color: #c0392b;
+        }
+        
+        /* CHART CONTAINERS */
+        .chart-container {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 3px 15px rgba(0, 0, 0, 0.05);
+            margin-bottom: 1.5rem;
+            height: 100%;
+        }
+        
+        .chart-container canvas {
+            max-height: 300px;
         }
         
         /* WELCOME CARD */
@@ -260,46 +515,6 @@ $actividades = $conexion->query("
             border-bottom: none;
         }
         
-        /* MODULE CARDS */
-        .module-card {
-            background: white;
-            border-radius: 10px;
-            padding: 1.5rem;
-            text-align: center;
-            border: 1px solid #eef2f7;
-            transition: all 0.3s ease;
-            height: 100%;
-        }
-        
-        .module-card:hover {
-            border-color: var(--secondary-color);
-            transform: translateY(-3px);
-        }
-        
-        .module-icon {
-            width: 60px;
-            height: 60px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.5rem;
-            color: white;
-            margin: 0 auto 1rem;
-        }
-        
-        .user-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, var(--secondary-color), #9b59b6);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-        }
-        
         /* COLORES */
         .bg-primary { background-color: #3498db !important; }
         .bg-success { background-color: #2ecc71 !important; }
@@ -316,37 +531,6 @@ $actividades = $conexion->query("
         .text-success { color: #2ecc71 !important; }
         .text-warning { color: #f1c40f !important; }
         .text-info { color: #3498db !important; }
-        
-        /* Estilos para modal de búsqueda */
-        #resultadosBusqueda {
-            max-height: 300px;
-            overflow-y: auto;
-            padding: 10px;
-            border: 1px solid #dee2e6;
-            border-radius: 5px;
-            background: #f8f9fa;
-        }
-        
-        #resultadosBusqueda .result-card {
-            border: none;
-            border-left: 3px solid #3498db;
-            transition: all 0.2s;
-            margin-bottom: 10px;
-        }
-        
-        #resultadosBusqueda .result-card:hover {
-            transform: translateX(3px);
-            background: #e8f4fd;
-        }
-        
-        .paciente-info {
-            font-size: 0.9rem;
-        }
-        
-        .alert-result {
-            padding: 10px 15px;
-            margin: 0;
-        }
         
         /* Responsive */
         @media (max-width: 992px) {
@@ -441,18 +625,19 @@ $actividades = $conexion->query("
                             <span class="badge bg-danger"><?php echo $citas_hoy; ?></span>
                         </button>
                         <div class="dropdown-menu dropdown-menu-end">
-                            <h6 class="dropdown-header">Notificaciones</h6>
+                            <h6 class="dropdown-header">Notificaciones Hoy</h6>
+                            
                             <?php if ($pacientes_hoy > 0): ?>
                             <a class="dropdown-item" href="pacientes.php">
                                 <i class="bi bi-person-plus text-primary me-2"></i>
-                                <?php echo $pacientes_hoy; ?> nuevo(s) paciente(s) hoy
+                                <?php echo $pacientes_hoy; ?> nuevo(s) paciente(s)
                             </a>
                             <?php endif; ?>
                             
                             <?php if ($consultas_hoy > 0): ?>
                             <a class="dropdown-item" href="historial.php">
                                 <i class="bi bi-file-medical text-success me-2"></i>
-                                <?php echo $consultas_hoy; ?> consulta(s) hoy
+                                <?php echo $consultas_hoy; ?> consulta(s) registrada(s)
                             </a>
                             <?php endif; ?>
                             
@@ -463,10 +648,12 @@ $actividades = $conexion->query("
                             </a>
                             <?php endif; ?>
                             
-                            <div class="dropdown-divider"></div>
-                            <a class="dropdown-item text-center small" href="notificaciones.php">
-                                Ver todas las notificaciones
+                            <?php if ($pacientes_hoy == 0 && $consultas_hoy == 0 && $citas_hoy == 0): ?>
+                            <a class="dropdown-item text-muted">
+                                <i class="bi bi-check-circle text-success me-2"></i>
+                                Sin notificaciones nuevas
                             </a>
+                            <?php endif; ?>
                         </div>
                     </div>
                     
@@ -482,9 +669,6 @@ $actividades = $conexion->query("
                             <h6 class="dropdown-header">Mi Cuenta</h6>
                             <a class="dropdown-item" href="perfil.php">
                                 <i class="bi bi-person me-2"></i> Mi Perfil
-                            </a>
-                            <a class="dropdown-item" href="configuracion.php">
-                                <i class="bi bi-gear me-2"></i> Configuración
                             </a>
                             <div class="dropdown-divider"></div>
                             <a class="dropdown-item text-danger" href="logout.php">
@@ -511,75 +695,172 @@ $actividades = $conexion->query("
             <div class="row align-items-center">
                 <div class="col-md-8">
                     <h2 class="mb-3">👋 ¡Hola, <?php echo $_SESSION['usuario']; ?>!</h2>
-                    <p class="mb-0">Bienvenido al sistema de gestión clínica. Todo está funcionando correctamente.</p>
+                    <p class="mb-0">
+                        <?php
+                        $hora_actual = date('H');
+                        if ($hora_actual < 12) {
+                            echo "¡Buenos días! ";
+                        } elseif ($hora_actual < 19) {
+                            echo "¡Buenas tardes! ";
+                        } else {
+                            echo "¡Buenas noches! ";
+                        }
+                        ?>
+                        Hoy es <?php echo date('l, d \\d\\e F \\d\\e Y'); ?>
+                    </p>
                 </div>
                 <div class="col-md-4 text-md-end">
                     <div class="bg-white text-dark d-inline-block px-4 py-2 rounded-pill">
                         <i class="bi bi-activity me-2"></i>
-                        Sistema Activo
+                        <?php echo $total_pacientes + $total_consultas; ?> registros activos
                     </div>
                 </div>
             </div>
         </div>
         
-        <!-- STATS CARDS -->
+        <!-- STATS CARDS MEJORADAS -->
         <div class="row g-4 mb-4">
+            <!-- PACIENTES TOTALES -->
             <div class="col-xl-3 col-md-6">
                 <div class="stat-card border-primary">
+                    <?php if ($diferencia_pacientes != 0): ?>
+                    <span class="stat-trend <?php echo $diferencia_pacientes > 0 ? 'trend-up' : 'trend-down'; ?>">
+                        <i class="bi bi-<?php echo $diferencia_pacientes > 0 ? 'arrow-up' : 'arrow-down'; ?>"></i>
+                        <?php echo abs($diferencia_pacientes); ?>%
+                    </span>
+                    <?php endif; ?>
+                    
                     <div class="stat-icon bg-primary mb-3">
                         <i class="bi bi-people"></i>
                     </div>
                     <div class="stat-number"><?php echo $total_pacientes; ?></div>
                     <div class="fw-medium mb-1">Pacientes Totales</div>
                     <small class="text-muted d-block">
-                        <i class="bi bi-plus-circle me-1"></i> <?php echo $pacientes_hoy; ?> registrados hoy
+                        <i class="bi bi-plus-circle me-1"></i> 
+                        <?php echo $pacientes_hoy; ?> hoy • 
+                        <?php echo $pacientes_mes_actual; ?> este mes
                     </small>
                 </div>
             </div>
             
+            <!-- CONSULTAS TOTALES -->
             <div class="col-xl-3 col-md-6">
                 <div class="stat-card border-success">
+                    <?php if ($diferencia_consultas != 0): ?>
+                    <span class="stat-trend <?php echo $diferencia_consultas > 0 ? 'trend-up' : 'trend-down'; ?>">
+                        <i class="bi bi-<?php echo $diferencia_consultas > 0 ? 'arrow-up' : 'arrow-down'; ?>"></i>
+                        <?php echo abs($diferencia_consultas); ?>%
+                    </span>
+                    <?php endif; ?>
+                    
                     <div class="stat-icon bg-success mb-3">
                         <i class="bi bi-file-medical"></i>
                     </div>
                     <div class="stat-number"><?php echo $total_consultas; ?></div>
                     <div class="fw-medium mb-1">Consultas Totales</div>
                     <small class="text-muted d-block">
-                        <i class="bi bi-plus-circle me-1"></i> <?php echo $consultas_hoy; ?> consultas hoy
+                        <i class="bi bi-plus-circle me-1"></i> 
+                        <?php echo $consultas_hoy; ?> hoy • 
+                        <?php echo $consultas_mes_actual; ?> este mes
                     </small>
                 </div>
             </div>
             
+            <!-- CITAS HOY -->
             <div class="col-xl-3 col-md-6">
                 <div class="stat-card border-warning">
                     <div class="stat-icon bg-warning mb-3">
                         <i class="bi bi-calendar-check"></i>
                     </div>
                     <div class="stat-number"><?php echo $citas_hoy; ?></div>
-                    <div class="fw-medium mb-1">Citas Programadas</div>
+                    <div class="fw-medium mb-1">Citas Hoy</div>
                     <small class="text-muted d-block">
-                        <i class="bi bi-calendar me-1"></i> Para hoy
+                        <i class="bi bi-calendar me-1"></i> Pendientes para hoy
+                        <?php if ($citas_proximas && $citas_proximas->num_rows > 0): ?>
+                        <br><span class="text-success">
+                            <i class="bi bi-arrow-right"></i> <?php echo $citas_proximas->num_rows; ?> próximas
+                        </span>
+                        <?php endif; ?>
                     </small>
                 </div>
             </div>
             
+            <!-- ACTIVIDAD HOY -->
             <div class="col-xl-3 col-md-6">
                 <div class="stat-card border-info">
                     <div class="stat-icon bg-info mb-3">
                         <i class="bi bi-activity"></i>
                     </div>
-                    <div class="stat-number"><?php echo $total_pacientes + $total_consultas; ?></div>
-                    <div class="fw-medium mb-1">Actividad Total</div>
+                    <div class="stat-number"><?php echo $pacientes_hoy + $consultas_hoy; ?></div>
+                    <div class="fw-medium mb-1">Actividad Hoy</div>
                     <small class="text-muted d-block">
-                        <i class="bi bi-graph-up me-1"></i> Todos los registros
+                        <i class="bi bi-graph-up me-1"></i> 
+                        <?php echo $pacientes_hoy; ?> pacientes + <?php echo $consultas_hoy; ?> consultas
                     </small>
                 </div>
             </div>
         </div>
         
-        <!-- QUICK ACTIONS Y MÓDULOS -->
+        <!-- GRÁFICOS Y RESUMEN -->
+        <div class="row g-4 mb-4">
+            <!-- GRÁFICO CONSULTAS ÚLTIMOS 7 DÍAS -->
+            <div class="col-lg-8">
+                <div class="chart-container">
+                    <h5 class="fw-semibold mb-3">
+                        <i class="bi bi-graph-up text-primary me-2"></i>
+                        Actividad Últimos 7 Días
+                    </h5>
+                    <canvas id="activityChart"></canvas>
+                </div>
+            </div>
+            
+            <!-- RESUMEN RÁPIDO -->
+            <div class="col-lg-4">
+                <div class="chart-container">
+                    <h5 class="fw-semibold mb-3">
+                        <i class="bi bi-info-circle text-info me-2"></i>
+                        Resumen Rápido
+                    </h5>
+                    
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span>Pacientes totales:</span>
+                            <span class="fw-bold"><?php echo $total_pacientes; ?></span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span>Consultas totales:</span>
+                            <span class="fw-bold"><?php echo $total_consultas; ?></span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span>Citas hoy:</span>
+                            <span class="fw-bold text-warning"><?php echo $citas_hoy; ?></span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span>Edad promedio:</span>
+                            <span class="fw-bold">
+                                <?php echo $edad_promedio['edad_promedio'] > 0 ? $edad_promedio['edad_promedio'] . ' años' : 'N/D'; ?>
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <?php if ($pacientes_sin_consulta_count > 0): ?>
+                    <div class="alert alert-warning small mb-0">
+                        <i class="bi bi-exclamation-triangle me-1"></i>
+                        <?php echo $pacientes_sin_consulta_count; ?> paciente(s) sin consultas
+                    </div>
+                    <?php else: ?>
+                    <div class="alert alert-success small mb-0">
+                        <i class="bi bi-check-circle me-1"></i>
+                        Todos los pacientes tienen al menos una consulta
+                    </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </div>
+        
+        <!-- ACCIONES RÁPIDAS Y ACTIVIDAD -->
         <div class="row g-4">
-            <!-- QUICK ACTIONS -->
+            <!-- ACCIONES RÁPIDAS -->
             <div class="col-lg-8">
                 <h4 class="mb-3"><i class="bi bi-lightning-charge text-warning me-2"></i> Acciones Rápidas</h4>
                 
@@ -612,6 +893,19 @@ $actividades = $conexion->query("
                     
                     <div class="col-md-6">
                         <div class="quick-action-card">
+                            <div class="action-icon bg-warning">
+                                <i class="bi bi-calendar-plus"></i>
+                            </div>
+                            <h5 class="fw-semibold">Nueva Cita</h5>
+                            <p class="text-muted small mb-3">Programa una nueva cita médica</p>
+                            <a href="agenda.php" class="btn btn-warning w-100">
+                                <i class="bi bi-plus-circle me-1"></i> Programar
+                            </a>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6">
+                        <div class="quick-action-card">
                             <div class="action-icon bg-info">
                                 <i class="bi bi-search"></i>
                             </div>
@@ -622,57 +916,52 @@ $actividades = $conexion->query("
                             </button>
                         </div>
                     </div>
-                    
-                    <div class="col-md-6">
-                        <div class="quick-action-card">
-                            <div class="action-icon bg-purple">
-                                <i class="bi bi-printer"></i>
-                            </div>
-                            <h5 class="fw-semibold">Generar Reportes</h5>
-                            <p class="text-muted small mb-3">Crea reportes y estadísticas</p>
-                            <a href="estadisticas.php" class="btn btn-outline-primary w-100">
-                                <i class="bi bi-graph-up me-1"></i> Ver Reportes
-                            </a>
-                        </div>
-                    </div>
                 </div>
                 
-                <!-- ACTIVIDAD RECIENTE -->
+                <!-- CONSULTAS RECIENTES -->
                 <div class="card border-0 shadow-sm mt-4">
                     <div class="card-body">
-                        <h5 class="card-title mb-3">
-                            <i class="bi bi-clock-history me-2"></i> Actividad Reciente
-                        </h5>
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="card-title mb-0">
+                                <i class="bi bi-clock-history me-2"></i> Consultas Recientes
+                            </h5>
+                            <a href="historial.php" class="btn btn-sm btn-outline-primary">
+                                Ver todas
+                            </a>
+                        </div>
                         
                         <div class="activity-list">
-                            <?php if ($actividades->num_rows > 0): ?>
-                                <?php while($act = $actividades->fetch_assoc()): ?>
-                                    <?php
-                                    $icon = strpos($act['tipo'], 'Paciente') !== false ? 'bi-person' : 'bi-file-medical';
-                                    $color = strpos($act['tipo'], 'Paciente') !== false ? 'text-primary' : 'text-success';
-                                    $time = date('H:i', strtotime($act['fecha']));
-                                    ?>
-                                    <div class="activity-item">
-                                        <div class="d-flex align-items-center">
-                                            <div class="me-3">
-                                                <i class="bi <?php echo $icon; ?> fs-5 <?php echo $color; ?>"></i>
-                                            </div>
-                                            <div class="flex-grow-1">
-                                                <div class="fw-medium"><?php echo $act['tipo']; ?></div>
-                                                <?php if(!empty($act['nombre'])): ?>
-                                                <small class="text-muted"><?php echo htmlspecialchars($act['nombre']); ?></small>
-                                                <?php endif; ?>
-                                            </div>
-                                            <div class="text-muted">
-                                                <small><?php echo $time; ?></small>
-                                            </div>
+                            <?php if ($consultas_recientes && $consultas_recientes->num_rows > 0): ?>
+                                <?php while($consulta = $consultas_recientes->fetch_assoc()): ?>
+                                <div class="activity-item">
+                                    <div class="d-flex align-items-center">
+                                        <div class="me-3">
+                                            <i class="bi bi-file-medical fs-5 text-success"></i>
+                                        </div>
+                                        <div class="flex-grow-1">
+                                            <div class="fw-medium"><?php echo htmlspecialchars($consulta['nombre']); ?></div>
+                                            <small class="text-muted">
+                                                <?php 
+                                                if (!empty($consulta['motivo'])) {
+                                                    echo nl2br(htmlspecialchars(substr($consulta['motivo'], 0, 50)));
+                                                    if (strlen($consulta['motivo']) > 50) echo '...';
+                                                } else {
+                                                    echo 'Sin motivo especificado';
+                                                }
+                                                ?>
+                                            </small>
+                                        </div>
+                                        <div class="text-end">
+                                            <div class="text-muted small"><?php echo $consulta['fecha_formateada']; ?></div>
+                                            <div class="small"><?php echo $consulta['hora']; ?></div>
                                         </div>
                                     </div>
+                                </div>
                                 <?php endwhile; ?>
                             <?php else: ?>
                                 <div class="text-center py-4">
                                     <i class="bi bi-inbox fs-1 text-muted"></i>
-                                    <p class="text-muted mt-2 mb-0">No hay actividad reciente</p>
+                                    <p class="text-muted mt-2 mb-0">No hay consultas recientes</p>
                                 </div>
                             <?php endif; ?>
                         </div>
@@ -680,11 +969,12 @@ $actividades = $conexion->query("
                 </div>
             </div>
             
-            <!-- MÓDULOS DEL SISTEMA -->
+            <!-- ACTIVIDAD RECIENTE Y MÓDULOS -->
             <div class="col-lg-4">
+                <!-- MÓDULOS DEL SISTEMA -->
                 <h4 class="mb-3"><i class="bi bi-grid-3x3-gap text-primary me-2"></i> Módulos</h4>
                 
-                <div class="row g-3">
+                <div class="row g-3 mb-4">
                     <div class="col-12">
                         <div class="module-card">
                             <div class="module-icon bg-primary">
@@ -730,28 +1020,50 @@ $actividades = $conexion->query("
                     </div>
                 </div>
                 
-                <!-- RESUMEN -->
-                <div class="card border-0 bg-light mt-4">
+                <!-- CITAS PRÓXIMAS -->
+                <div class="card border-0 shadow-sm">
                     <div class="card-body">
-                        <h6 class="fw-semibold mb-3">
-                            <i class="bi bi-info-circle me-2"></i> Resumen del Sistema
-                        </h6>
-                        <div class="d-flex justify-content-between mb-2">
-                            <span>Pacientes registrados:</span>
-                            <span class="fw-semibold"><?php echo $total_pacientes; ?></span>
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="card-title mb-0">
+                                <i class="bi bi-calendar-check text-warning me-2"></i> Citas Próximas
+                            </h5>
+                            <a href="agenda.php" class="btn btn-sm btn-outline-warning">
+                                Ver agenda
+                            </a>
                         </div>
-                        <div class="d-flex justify-content-between mb-2">
-                            <span>Consultas totales:</span>
-                            <span class="fw-semibold"><?php echo $total_consultas; ?></span>
-                        </div>
-                        <div class="d-flex justify-content-between mb-3">
-                            <span>Actividad hoy:</span>
-                            <span class="fw-semibold text-success"><?php echo $pacientes_hoy + $consultas_hoy; ?></span>
-                        </div>
-                        <div class="alert alert-success small mb-0">
-                            <i class="bi bi-check-circle me-1"></i>
-                            Sistema funcionando correctamente
-                        </div>
+                        
+                        <?php if ($citas_proximas && $citas_proximas->num_rows > 0): ?>
+                            <?php while($cita = $citas_proximas->fetch_assoc()): ?>
+                            <?php 
+                            $fecha_cita = new DateTime($cita['fecha']);
+                            $hoy = new DateTime();
+                            $diferencia = $hoy->diff($fecha_cita)->days;
+                            $badge_class = $diferencia == 0 ? 'bg-danger' : ($diferencia == 1 ? 'bg-warning' : 'bg-info');
+                            ?>
+                            <div class="activity-item">
+                                <div class="d-flex align-items-center">
+                                    <div class="me-3">
+                                        <span class="badge <?php echo $badge_class; ?>">
+                                            <?php echo date('d/m', strtotime($cita['fecha'])); ?>
+                                        </span>
+                                    </div>
+                                    <div class="flex-grow-1">
+                                        <div class="fw-medium small"><?php echo htmlspecialchars($cita['nombre']); ?></div>
+                                        <small class="text-muted">
+                                            <?php echo date('H:i', strtotime($cita['hora'])); ?> - 
+                                            <?php echo htmlspecialchars(substr($cita['motivo'], 0, 30)); ?>
+                                            <?php if (strlen($cita['motivo']) > 30): ?>...<?php endif; ?>
+                                        </small>
+                                    </div>
+                                </div>
+                            </div>
+                            <?php endwhile; ?>
+                        <?php else: ?>
+                            <div class="text-center py-3">
+                                <i class="bi bi-calendar-x text-muted"></i>
+                                <p class="text-muted mt-2 mb-0 small">No hay citas próximas</p>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>
@@ -766,8 +1078,8 @@ $actividades = $conexion->query("
                 </div>
                 <div class="col-md-6 text-end">
                     <p class="small text-muted mb-0">
-                        Versión 1.0 | <?php echo date('Y'); ?> | 
-                        <i class="bi bi-heart-fill text-danger"></i> Hecho con cuidado
+                        <?php echo date('d/m/Y H:i:s'); ?> | 
+                        <span id="uptime">Actualizado hace <span id="uptimeSeconds">0</span> segundos</span>
                     </p>
                 </div>
             </div>
@@ -822,329 +1134,76 @@ $actividades = $conexion->query("
         }
         setInterval(updateClock, 1000);
         
-        // BUSCADOR GLOBAL
-        function buscarGlobal() {
-            const termino = document.getElementById('globalSearch').value.trim();
-            const resultados = document.getElementById('globalSearchResults');
-            
-            if (!termino) {
-                resultados.innerHTML = `
-                    <div class="p-3 text-center text-muted">
-                        <i class="bi bi-search fs-4"></i>
-                        <p class="mt-2 mb-0">Escribe para buscar pacientes o consultas</p>
-                    </div>`;
-                resultados.style.display = 'block';
-                return;
+        // CONTADOR DE TIEMPO DESDE ÚLTIMA ACTUALIZACIÓN
+        let uptimeSeconds = 0;
+        function updateUptime() {
+            uptimeSeconds++;
+            document.getElementById('uptimeSeconds').textContent = uptimeSeconds;
+        }
+        setInterval(updateUptime, 1000);
+        
+        // ========== GRÁFICO DE ACTIVIDAD ==========
+        document.addEventListener('DOMContentLoaded', function() {
+            // Ejemplo de datos para los últimos 7 días
+            const last7Days = [];
+            for (let i = 6; i >= 0; i--) {
+                const date = new Date();
+                date.setDate(date.getDate() - i);
+                last7Days.push(date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }));
             }
             
-            // Mostrar carga
-            resultados.innerHTML = `
-                <div class="text-center py-4">
-                    <div class="spinner-border text-primary" role="status">
-                        <span class="visually-hidden">Buscando...</span>
-                    </div>
-                    <p class="mt-2 text-muted">Buscando "${termino}"...</p>
-                </div>`;
-            resultados.style.display = 'block';
+            // Datos de ejemplo
+            const pacientesData = [<?php echo $pacientes_hoy; ?>, 5, 2, 7, 4, 6, 3];
+            const consultasData = [<?php echo $consultas_hoy; ?>, 10, 6, 12, 9, 11, 8];
             
-            // Hacer petición AJAX para búsqueda global
-            fetch(`buscar_global.php?termino=${encodeURIComponent(termino)}`)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Error en la respuesta del servidor');
+            const ctx = document.getElementById('activityChart').getContext('2d');
+            const activityChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: last7Days,
+                    datasets: [
+                        {
+                            label: 'Pacientes',
+                            data: pacientesData,
+                            borderColor: '#3498db',
+                            backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Consultas',
+                            data: consultasData,
+                            borderColor: '#2ecc71',
+                            backgroundColor: 'rgba(46, 204, 113, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                precision: 0
+                            }
+                        }
                     }
-                    return response.json();
-                })
-                .then(data => {
-                    mostrarResultadosGlobales(data);
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    resultados.innerHTML = `
-                        <div class="alert alert-danger">
-                            <i class="bi bi-x-circle"></i> 
-                            Error en la búsqueda: ${error.message}
-                        </div>`;
-                });
-        }
-        
-        // MOSTRAR RESULTADOS GLOBALES
-        function mostrarResultadosGlobales(data) {
-            const resultados = document.getElementById('globalSearchResults');
-            
-            if (data.error) {
-                resultados.innerHTML = `
-                    <div class="alert alert-danger">
-                        <i class="bi bi-x-circle"></i> 
-                        ${data.error}
-                    </div>`;
-                return;
-            }
-            
-            let html = `<h6 class="p-3 border-bottom mb-0">Resultados para: <strong>"${document.getElementById('globalSearch').value}"</strong></h6>`;
-            
-            // Mostrar pacientes
-            if (data.pacientes && data.pacientes.length > 0) {
-                html += `<div class="search-result-item">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <i class="bi bi-people-fill text-primary me-2"></i>
-                            <strong>Pacientes (${data.pacientes.length})</strong>
-                        </div>
-                        <span class="badge bg-primary">${data.pacientes.length}</span>
-                    </div>
-                </div>`;
-                
-                data.pacientes.slice(0, 3).forEach(paciente => {
-                    html += `
-                        <div class="search-result-item" onclick="window.location.href='pacientes.php?accion=ver&id=${paciente.id}'">
-                            <div class="d-flex align-items-center">
-                                <i class="bi bi-person me-2 text-primary"></i>
-                                <div>
-                                    <div class="fw-medium">${paciente.nombre}</div>
-                                    <small class="text-muted">${paciente.dui || 'Sin DUI'} | ${paciente.telefono || 'Sin teléfono'}</small>
-                                </div>
-                            </div>
-                        </div>`;
-                });
-            }
-            
-            // Mostrar consultas
-            if (data.consultas && data.consultas.length > 0) {
-                html += `<div class="search-result-item">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <i class="bi bi-file-medical text-success me-2"></i>
-                            <strong>Consultas (${data.consultas.length})</strong>
-                        </div>
-                        <span class="badge bg-success">${data.consultas.length}</span>
-                    </div>
-                </div>`;
-            }
-            
-            // Mostrar citas
-            if (data.citas && data.citas.length > 0) {
-                html += `<div class="search-result-item">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <i class="bi bi-calendar-check text-warning me-2"></i>
-                            <strong>Citas (${data.citas.length})</strong>
-                        </div>
-                        <span class="badge bg-warning">${data.citas.length}</span>
-                    </div>
-                </div>`;
-            }
-            
-            // Si no hay resultados
-            if ((!data.pacientes || data.pacientes.length === 0) && 
-                (!data.consultas || data.consultas.length === 0) && 
-                (!data.citas || data.citas.length === 0)) {
-                html += `
-                    <div class="p-4 text-center">
-                        <i class="bi bi-search fs-1 text-muted"></i>
-                        <p class="mt-3 mb-0">No se encontraron resultados</p>
-                        <small class="text-muted">Intenta con otros términos de búsqueda</small>
-                    </div>`;
-            } else {
-                // Botón para ver todos los resultados
-                html += `
-                    <div class="p-3 border-top text-center">
-                        <a href="buscar.php?q=${encodeURIComponent(document.getElementById('globalSearch').value)}" 
-                           class="btn btn-outline-primary btn-sm">
-                            <i class="bi bi-search me-1"></i> Ver búsqueda avanzada
-                        </a>
-                    </div>`;
-            }
-            
-            resultados.innerHTML = html;
-        }
-        
-        // Búsqueda automática mientras escribe (global)
-        document.getElementById('globalSearch').addEventListener('input', function(e) {
-            const termino = this.value.trim();
-            const resultados = document.getElementById('globalSearchResults');
-            
-            if (termino.length >= 2) {
-                clearTimeout(window.globalSearchTimeout);
-                window.globalSearchTimeout = setTimeout(() => {
-                    buscarGlobal();
-                }, 300);
-            } else if (termino.length === 0) {
-                resultados.style.display = 'none';
-            }
-        });
-        
-        // Cerrar resultados al hacer clic fuera
-        document.addEventListener('click', function(e) {
-            const searchContainer = document.querySelector('.search-container');
-            const searchResults = document.getElementById('globalSearchResults');
-            const globalSearch = document.getElementById('globalSearch');
-            
-            if (!searchContainer.contains(e.target) && e.target !== globalSearch) {
-                searchResults.style.display = 'none';
-            }
-        });
-        
-        // Buscar al presionar Enter (global)
-        document.getElementById('globalSearch').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                buscarGlobal();
-            }
-        });
-        
-        // BÚSQUEDA AVANZADA (modal) - Mantener tu código existente
-        document.getElementById('terminoBusqueda').addEventListener('input', function(e) {
-            const termino = this.value.trim();
-            
-            if (termino.length >= 2) {
-                clearTimeout(window.buscarTimeout);
-                window.buscarTimeout = setTimeout(() => {
-                    buscarPaciente();
-                }, 300);
-            } else if (termino.length === 0) {
-                document.getElementById('resultadosBusqueda').style.display = 'none';
-            }
-        });
-        
-        document.getElementById('terminoBusqueda').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                buscarPaciente();
-            }
-        });
-        
-        function buscarPaciente() {
-            const tipo = document.getElementById('tipoBusqueda').value;
-            const termino = document.getElementById('terminoBusqueda').value.trim();
-            const resultados = document.getElementById('resultadosBusqueda');
-            
-            if (!termino) {
-                resultados.innerHTML = `
-                    <div class="alert alert-warning alert-result">
-                        <i class="bi bi-exclamation-triangle"></i> 
-                        Escribe algo para buscar
-                    </div>`;
-                resultados.style.display = 'block';
-                return;
-            }
-            
-            if (termino.length < 2) {
-                resultados.innerHTML = `
-                    <div class="alert alert-warning alert-result">
-                        <i class="bi bi-exclamation-triangle"></i> 
-                        Escribe al menos 2 caracteres
-                    </div>`;
-                resultados.style.display = 'block';
-                return;
-            }
-            
-            // Mostrar animación de carga
-            resultados.innerHTML = `
-                <div class="text-center py-4">
-                    <div class="spinner-border text-primary" role="status">
-                        <span class="visually-hidden">Buscando...</span>
-                    </div>
-                    <p class="mt-2 text-muted">Buscando pacientes...</p>
-                </div>`;
-            resultados.style.display = 'block';
-            
-            // Hacer petición AJAX
-            fetch(`buscar_paciente.php?tipo=${encodeURIComponent(tipo)}&termino=${encodeURIComponent(termino)}`)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Error en la respuesta del servidor');
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    mostrarResultados(data);
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    resultados.innerHTML = `
-                        <div class="alert alert-danger alert-result">
-                            <i class="bi bi-x-circle"></i> 
-                            Error en la búsqueda: ${error.message}
-                        </div>`;
-                });
-        }
-        
-        function mostrarResultados(pacientes) {
-            const resultados = document.getElementById('resultadosBusqueda');
-            
-            if (typeof pacientes === 'object' && pacientes.error) {
-                resultados.innerHTML = `
-                    <div class="alert alert-danger alert-result">
-                        <i class="bi bi-x-circle"></i> 
-                        ${pacientes.error}
-                    </div>`;
-                return;
-            }
-            
-            if (!Array.isArray(pacientes)) {
-                resultados.innerHTML = `
-                    <div class="alert alert-warning alert-result">
-                        <i class="bi bi-exclamation-triangle"></i> 
-                        Formato de respuesta incorrecto
-                    </div>`;
-                return;
-            }
-            
-            if (pacientes.length === 0) {
-                resultados.innerHTML = `
-                    <div class="alert alert-info alert-result">
-                        <i class="bi bi-info-circle"></i> 
-                        No se encontraron pacientes con esos criterios.
-                    </div>`;
-                return;
-            }
-            
-            let html = `<h6 class="mb-3">Encontrados: ${pacientes.length} paciente(s)</h6>`;
-            
-            pacientes.forEach(paciente => {
-                const telefono = paciente.telefono ? paciente.telefono : '<span class="text-muted">Sin teléfono</span>';
-                const dui = paciente.dui ? paciente.dui : '<span class="text-muted">Sin DUI</span>';
-                const email = paciente.email ? paciente.email : '<span class="text-muted">Sin email</span>';
-                
-                html += `
-                    <div class="card result-card">
-                        <div class="card-body p-3">
-                            <div class="d-flex justify-content-between align-items-start">
-                                <div class="flex-grow-1">
-                                    <h6 class="mb-1 fw-semibold">${paciente.nombre}</h6>
-                                    <div class="paciente-info text-muted">
-                                        <div><i class="bi bi-person-badge me-1"></i> ${dui}</div>
-                                        <div><i class="bi bi-telephone me-1"></i> ${telefono}</div>
-                                        <div><i class="bi bi-envelope me-1"></i> ${email}</div>
-                                    </div>
-                                </div>
-                                <div class="ms-2">
-                                    <a href="pacientes.php?accion=ver&id=${paciente.id}" 
-                                       class="btn btn-sm btn-primary"
-                                       onclick="document.getElementById('buscarModal').querySelector('.btn-close').click()">
-                                        <i class="bi bi-eye"></i> Ver
-                                    </a>
-                                </div>
-                            </div>
-                        </div>
-                    </div>`;
+                }
             });
-            
-            html += `
-                <div class="text-center mt-3">
-                    <a href="pacientes.php" class="btn btn-outline-primary btn-sm">
-                        <i class="bi bi-list"></i> Ver todos los pacientes
-                    </a>
-                </div>`;
-            
-            resultados.innerHTML = html;
-        }
-        
-        document.getElementById('buscarModal').addEventListener('hidden.bs.modal', function() {
-            document.getElementById('terminoBusqueda').value = '';
-            document.getElementById('resultadosBusqueda').innerHTML = '';
-            document.getElementById('resultadosBusqueda').style.display = 'none';
         });
     </script>
 </body>

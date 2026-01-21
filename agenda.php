@@ -1,5 +1,4 @@
 <?php
-// agenda.php - MÓDULO SIMPLIFICADO DE AGENDA CON OPCIÓN DE CREAR CONSULTA
 session_start();
 require_once 'config.php';
 
@@ -9,13 +8,35 @@ if (!isset($_SESSION['logueado']) || $_SESSION['logueado'] !== true) {
     exit;
 }
 
+// Obtener rol del usuario actual
+$usuario_id = $_SESSION['usuario_id'];
+$rol_usuario = $_SESSION['rol'] ?? 'secretaria';
+
 // Inicializar mensajes
 $mensaje_exito = '';
 $mensaje_error = '';
 
+// ACTUALIZAR ROLES EN LA BASE DE DATOS (ejecutar una sola vez - luego comentar)
+$actualizar_roles = false; // Cambiar a true solo la primera vez
+if ($actualizar_roles) {
+    $conexion->query("UPDATE usuarios SET rol = 'medico' WHERE (nombre LIKE '%Dr.%' OR nombre LIKE '%medico%') AND (rol = '' OR rol IS NULL)");
+    $conexion->query("UPDATE usuarios SET rol = 'secretaria' WHERE nombre LIKE '%secretaria%' AND (rol = '' OR rol IS NULL)");
+    $conexion->query("UPDATE usuarios SET rol = 'admin' WHERE nombre LIKE '%admin%' AND (rol = '' OR rol IS NULL)");
+}
+
+// Obtener lista de doctores (usuarios con rol 'medico' o que tengan "Dr." en el nombre)
+$doctores = $conexion->query("
+    SELECT id, nombre 
+    FROM usuarios 
+    WHERE (rol = 'medico' OR nombre LIKE '%Dr.%') 
+    AND activo = 1 
+    ORDER BY nombre
+");
+
 // Procesar formulario de nueva cita
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['guardar_cita'])) {
     $paciente_id = intval($_POST['paciente_id']);
+    $doctor_id = intval($_POST['doctor_id']);
     $fecha = $_POST['fecha'];
     $hora = $_POST['hora'];
     $duracion = intval($_POST['duracion']);
@@ -24,21 +45,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['guardar_cita'])) {
     $notas = $_POST['notas'];
     
     // Validar datos
-    if ($paciente_id > 0 && !empty($fecha) && !empty($hora) && !empty($motivo)) {
-        $sql = "INSERT INTO agenda (paciente_id, fecha, hora, duracion, tipo, motivo, notas) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)";
-        $stmt = $conexion->prepare($sql);
-        if ($stmt) {
-            $stmt->bind_param("issiiss", $paciente_id, $fecha, $hora, $duracion, $tipo, $motivo, $notas);
-            
-            if ($stmt->execute()) {
-                $mensaje_exito = "✅ Cita guardada correctamente";
-            } else {
-                $mensaje_error = "❌ Error al guardar la cita";
-            }
-            $stmt->close();
+    if ($paciente_id > 0 && $doctor_id > 0 && !empty($fecha) && !empty($hora) && !empty($motivo)) {
+        
+        // Verificar disponibilidad del doctor
+        $sql_check = "SELECT COUNT(*) as count FROM agenda 
+                     WHERE doctor_id = ? 
+                     AND fecha = ? 
+                     AND hora = ? 
+                     AND estado NOT IN ('cancelada', 'completada')";
+        
+        $stmt_check = $conexion->prepare($sql_check);
+        $stmt_check->bind_param("iss", $doctor_id, $fecha, $hora);
+        $stmt_check->execute();
+        $result_check = $stmt_check->get_result()->fetch_assoc();
+        $stmt_check->close();
+        
+        if ($result_check['count'] > 0) {
+            $mensaje_error = "❌ El doctor ya tiene una cita a esa hora";
         } else {
-            $mensaje_error = "❌ Error en la consulta SQL";
+            // Insertar nueva cita
+            $sql = "INSERT INTO agenda (paciente_id, doctor_id, fecha, hora, duracion, tipo, motivo, notas, estado, creado_por) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pendiente', ?)";
+            $stmt = $conexion->prepare($sql);
+            if ($stmt) {
+                $stmt->bind_param("iissiissi", 
+                    $paciente_id, 
+                    $doctor_id, 
+                    $fecha, 
+                    $hora, 
+                    $duracion, 
+                    $tipo, 
+                    $motivo, 
+                    $notas,
+                    $usuario_id
+                );
+                
+                if ($stmt->execute()) {
+                    $mensaje_exito = "✅ Cita guardada correctamente";
+                } else {
+                    $mensaje_error = "❌ Error al guardar la cita: " . $stmt->error;
+                }
+                $stmt->close();
+            } else {
+                $mensaje_error = "❌ Error en la consulta SQL";
+            }
         }
     } else {
         $mensaje_error = "❌ Complete todos los campos requeridos";
@@ -55,7 +105,22 @@ if (isset($_GET['cambiar_estado'])) {
     if ($stmt) {
         $stmt->bind_param("si", $nuevo_estado, $cita_id);
         if ($stmt->execute()) {
-            $mensaje_exito = "✅ Estado actualizado";
+            $mensaje_exito = "✅ Estado actualizado a " . $nuevo_estado;
+        }
+        $stmt->close();
+    }
+}
+
+// Marcar cita como completada (desde historial)
+if (isset($_GET['completar_cita'])) {
+    $cita_id = intval($_GET['cita_id']);
+    
+    $sql = "UPDATE agenda SET estado = 'completada' WHERE id = ?";
+    $stmt = $conexion->prepare($sql);
+    if ($stmt) {
+        $stmt->bind_param("i", $cita_id);
+        if ($stmt->execute()) {
+            $mensaje_exito = "✅ Cita marcada como completada";
         }
         $stmt->close();
     }
@@ -78,38 +143,113 @@ if (isset($_GET['eliminar_cita'])) {
 
 // Obtener datos
 try {
-    // Estadísticas
+    // Estadísticas generales
     $total_citas = $conexion->query("SELECT COUNT(*) as total FROM agenda")->fetch_assoc()['total'];
     $citas_hoy = $conexion->query("SELECT COUNT(*) as total FROM agenda WHERE fecha = CURDATE()")->fetch_assoc()['total'];
     $citas_semana = $conexion->query("SELECT COUNT(*) as total FROM agenda WHERE fecha BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)")->fetch_assoc()['total'];
     $pendientes = $conexion->query("SELECT COUNT(*) as total FROM agenda WHERE estado = 'pendiente'")->fetch_assoc()['total'];
+    $completadas = $conexion->query("SELECT COUNT(*) as total FROM agenda WHERE estado = 'completada'")->fetch_assoc()['total'];
     
-    // Citas de hoy
-    $citas_hoy_detalle = $conexion->query("
-        SELECT a.*, p.nombre as paciente_nombre 
-        FROM agenda a 
-        LEFT JOIN pacientes p ON a.paciente_id = p.id 
-        WHERE a.fecha = CURDATE() 
-        ORDER BY a.hora
-    ");
-    
-    // Próximas citas
-    $proximas_citas = $conexion->query("
-        SELECT a.*, p.nombre as paciente_nombre 
-        FROM agenda a 
-        LEFT JOIN pacientes p ON a.paciente_id = p.id 
-        WHERE a.fecha >= CURDATE() 
-        AND a.fecha <= DATE_ADD(CURDATE(), INTERVAL 7 DAY)
-        AND a.estado != 'cancelada'
-        ORDER BY a.fecha, a.hora
-        LIMIT 10
-    ");
+    // Si es doctor, solo ver sus citas
+    if ($rol_usuario == 'doctor' || $rol_usuario == 'medico') {
+        $doctor_id = $_SESSION['usuario_id'];
+        
+        // Citas de hoy del doctor
+        $citas_hoy_detalle = $conexion->query("
+            SELECT a.*, p.nombre as paciente_nombre, u.nombre as doctor_nombre
+            FROM agenda a 
+            LEFT JOIN pacientes p ON a.paciente_id = p.id 
+            LEFT JOIN usuarios u ON a.doctor_id = u.id
+            WHERE a.fecha = CURDATE() 
+            AND a.doctor_id = $doctor_id
+            ORDER BY a.hora
+        ");
+        
+        // Próximas citas del doctor
+        $proximas_citas = $conexion->query("
+            SELECT a.*, p.nombre as paciente_nombre, u.nombre as doctor_nombre
+            FROM agenda a 
+            LEFT JOIN pacientes p ON a.paciente_id = p.id 
+            LEFT JOIN usuarios u ON a.doctor_id = u.id
+            WHERE a.fecha >= CURDATE() 
+            AND a.fecha <= DATE_ADD(CURDATE(), INTERVAL 7 DAY)
+            AND a.doctor_id = $doctor_id
+            AND a.estado != 'cancelada'
+            ORDER BY a.fecha, a.hora
+            LIMIT 15
+        ");
+        
+        // Horas disponibles del doctor
+        $horas_disponibles = obtenerHorasDisponiblesDoctor($conexion, $doctor_id, date('Y-m-d'));
+        
+    } else {
+        // Para secretaria/administrador: ver todas las citas
+        
+        // Citas de hoy
+        $citas_hoy_detalle = $conexion->query("
+            SELECT a.*, p.nombre as paciente_nombre, u.nombre as doctor_nombre
+            FROM agenda a 
+            LEFT JOIN pacientes p ON a.paciente_id = p.id 
+            LEFT JOIN usuarios u ON a.doctor_id = u.id
+            WHERE a.fecha = CURDATE() 
+            ORDER BY a.hora, a.doctor_id
+        ");
+        
+        // Próximas citas
+        $proximas_citas = $conexion->query("
+            SELECT a.*, p.nombre as paciente_nombre, u.nombre as doctor_nombre
+            FROM agenda a 
+            LEFT JOIN pacientes p ON a.paciente_id = p.id 
+            LEFT JOIN usuarios u ON a.doctor_id = u.id
+            WHERE a.fecha >= CURDATE() 
+            AND a.fecha <= DATE_ADD(CURDATE(), INTERVAL 7 DAY)
+            AND a.estado != 'cancelada'
+            ORDER BY a.fecha, a.hora
+            LIMIT 15
+        ");
+    }
     
     // Todos los pacientes
     $pacientes = $conexion->query("SELECT id, nombre FROM pacientes ORDER BY nombre");
     
 } catch (Exception $e) {
     $error_bd = "Error: " . $e->getMessage();
+}
+
+// Función para obtener horas disponibles de un doctor
+function obtenerHorasDisponiblesDoctor($conexion, $doctor_id, $fecha) {
+    $horas_ocupadas = [];
+    
+    // Obtener horas ya ocupadas
+    $sql = "SELECT hora FROM agenda 
+            WHERE doctor_id = ? 
+            AND fecha = ? 
+            AND estado NOT IN ('cancelada')";
+    
+    $stmt = $conexion->prepare($sql);
+    $stmt->bind_param("is", $doctor_id, $fecha);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    
+    while($row = $result->fetch_assoc()) {
+        $horas_ocupadas[] = $row['hora'];
+    }
+    $stmt->close();
+    
+    // Horarios de consulta estándar (8am a 5pm)
+    $horas_disponibles = [];
+    $hora_inicio = strtotime('08:00');
+    $hora_fin = strtotime('17:00');
+    
+    while ($hora_inicio <= $hora_fin) {
+        $hora_str = date('H:i', $hora_inicio);
+        if (!in_array($hora_str, $horas_ocupadas)) {
+            $horas_disponibles[] = $hora_str;
+        }
+        $hora_inicio = strtotime('+30 minutes', $hora_inicio);
+    }
+    
+    return $horas_disponibles;
 }
 ?>
 
@@ -128,11 +268,16 @@ try {
         .cita-card { border-left: 4px solid; border-radius: 8px; margin-bottom: 1rem; padding: 1rem; background: white; }
         .estado-pendiente { border-left-color: #f39c12; background-color: #fff8e1; }
         .estado-confirmada { border-left-color: #2ecc71; background-color: #e8f5e9; }
+        .estado-completada { border-left-color: #3498db; background-color: #e8f4fd; }
         .estado-cancelada { border-left-color: #e74c3c; background-color: #ffebee; }
         .calendar-day { border: 1px solid #dee2e6; height: 120px; padding: 0.5rem; overflow-y: auto; }
         .today { background-color: #e7f5ff; border: 2px solid #3498db !important; }
         .btn-consulta { background: linear-gradient(135deg, #2ecc71, #27ae60); color: white; }
         .btn-consulta:hover { background: linear-gradient(135deg, #27ae60, #219653); color: white; }
+        .doctor-badge { background: #3498db; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.8rem; }
+        .role-badge { background: #9b59b6; color: white; padding: 3px 10px; border-radius: 15px; font-size: 0.9rem; }
+        .hora-disponible { background: #d4edda; color: #155724; padding: 5px 10px; border-radius: 5px; margin: 2px; display: inline-block; }
+        .hora-ocupada { background: #f8d7da; color: #721c24; padding: 5px 10px; border-radius: 5px; margin: 2px; display: inline-block; }
     </style>
 </head>
 <body>
@@ -164,49 +309,71 @@ try {
                     <p class="text-muted mb-0">
                         <i class="bi bi-calendar3 me-1"></i>
                         <?php echo date('d/m/Y'); ?>
+                        <span class="role-badge ms-2">
+                            <i class="bi bi-person-badge me-1"></i>
+                            <?php echo ucfirst($rol_usuario); ?>
+                        </span>
                     </p>
                 </div>
                 <div>
+                    <?php if ($rol_usuario == 'secretaria' || $rol_usuario == 'admin'): ?>
                     <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#nuevaCitaModal">
                         <i class="bi bi-plus-circle me-1"></i> Nueva Cita
                     </button>
-                    <a href="consultas.php" class="btn btn-success ms-2">
-                        <i class="bi bi-file-medical me-1"></i> Ver Consultas
+                    <?php endif; ?>
+                    <a href="historial.php" class="btn btn-success ms-2">
+                        <i class="bi bi-file-medical me-1"></i> Historial
                     </a>
                 </div>
             </div>
             
             <!-- ESTADÍSTICAS -->
             <div class="row g-3 mb-4">
-                <div class="col-md-3">
+                <div class="col-md-2">
                     <div class="stat-card border-primary">
                         <div class="text-primary mb-2"><i class="bi bi-calendar-check fs-1"></i></div>
                         <div class="stat-number"><?php echo $total_citas; ?></div>
-                        <div class="fw-bold">Citas Totales</div>
+                        <div class="fw-bold">Total</div>
                     </div>
                 </div>
                 
-                <div class="col-md-3">
+                <div class="col-md-2">
                     <div class="stat-card border-success">
                         <div class="text-success mb-2"><i class="bi bi-calendar-day fs-1"></i></div>
                         <div class="stat-number"><?php echo $citas_hoy; ?></div>
-                        <div class="fw-bold">Citas Hoy</div>
+                        <div class="fw-bold">Hoy</div>
                     </div>
                 </div>
                 
-                <div class="col-md-3">
+                <div class="col-md-2">
                     <div class="stat-card border-warning">
                         <div class="text-warning mb-2"><i class="bi bi-calendar-week fs-1"></i></div>
                         <div class="stat-number"><?php echo $citas_semana; ?></div>
-                        <div class="fw-bold">Esta Semana</div>
+                        <div class="fw-bold">Semana</div>
                     </div>
                 </div>
                 
-                <div class="col-md-3">
+                <div class="col-md-2">
                     <div class="stat-card border-info">
                         <div class="text-info mb-2"><i class="bi bi-clock-history fs-1"></i></div>
                         <div class="stat-number"><?php echo $pendientes; ?></div>
                         <div class="fw-bold">Pendientes</div>
+                    </div>
+                </div>
+                
+                <div class="col-md-2">
+                    <div class="stat-card border-secondary">
+                        <div class="text-secondary mb-2"><i class="bi bi-check-circle fs-1"></i></div>
+                        <div class="stat-number"><?php echo $completadas; ?></div>
+                        <div class="fw-bold">Completadas</div>
+                    </div>
+                </div>
+                
+                <div class="col-md-2">
+                    <div class="stat-card" style="border-top-color: #9b59b6;">
+                        <div class="mb-2" style="color: #9b59b6;"><i class="bi bi-person-badge fs-1"></i></div>
+                        <div class="stat-number"><?php echo $doctores->num_rows; ?></div>
+                        <div class="fw-bold">Doctores</div>
                     </div>
                 </div>
             </div>
@@ -214,7 +381,10 @@ try {
             <!-- CITAS DE HOY -->
             <div class="card mb-4">
                 <div class="card-header bg-primary text-white">
-                    <h5 class="mb-0"><i class="bi bi-calendar-day me-2"></i> Citas para hoy</h5>
+                    <h5 class="mb-0">
+                        <i class="bi bi-calendar-day me-2"></i> 
+                        <?php echo ($rol_usuario == 'doctor' || $rol_usuario == 'medico') ? 'Mis Citas de Hoy' : 'Citas para hoy'; ?>
+                    </h5>
                 </div>
                 <div class="card-body">
                     <?php if ($citas_hoy_detalle && $citas_hoy_detalle->num_rows > 0): ?>
@@ -223,8 +393,18 @@ try {
                             <div class="col-md-6 mb-3">
                                 <div class="cita-card estado-<?php echo $cita['estado']; ?>">
                                     <div class="d-flex justify-content-between align-items-start">
-                                        <div>
+                                        <div class="flex-grow-1">
                                             <h6 class="mb-1"><?php echo htmlspecialchars($cita['paciente_nombre']); ?></h6>
+                                            
+                                            <?php if ($rol_usuario != 'doctor' && $rol_usuario != 'medico'): ?>
+                                            <div class="mb-1">
+                                                <span class="doctor-badge">
+                                                    <i class="bi bi-person me-1"></i>
+                                                    Dr. <?php echo htmlspecialchars($cita['doctor_nombre'] ?? 'No asignado'); ?>
+                                                </span>
+                                            </div>
+                                            <?php endif; ?>
+                                            
                                             <p class="mb-1 small">
                                                 <i class="bi bi-clock me-1"></i>
                                                 <?php echo date('H:i', strtotime($cita['hora'])); ?> 
@@ -235,11 +415,12 @@ try {
                                                 <?php echo htmlspecialchars($cita['motivo']); ?>
                                             </p>
                                         </div>
-                                        <div>
+                                        <div class="text-end">
                                             <span class="badge bg-<?php 
                                                 switch($cita['estado']) {
                                                     case 'pendiente': echo 'warning'; break;
                                                     case 'confirmada': echo 'success'; break;
+                                                    case 'completada': echo 'primary'; break;
                                                     case 'cancelada': echo 'danger'; break;
                                                     default: echo 'info';
                                                 }
@@ -247,7 +428,7 @@ try {
                                                 <?php echo ucfirst($cita['estado']); ?>
                                             </span>
                                             <div class="btn-group btn-group-sm mt-2">
-                                                <!-- BOTÓN IMPORTANTE: CREAR CONSULTA -->
+                                                <!-- BOTÓN PARA CREAR CONSULTA - CORREGIDO -->
                                                 <?php if ($cita['estado'] === 'pendiente' || $cita['estado'] === 'confirmada'): ?>
                                                 <a href="crear_consulta.php?cita_id=<?php echo $cita['id']; ?>&paciente_id=<?php echo $cita['paciente_id']; ?>" 
                                                    class="btn btn-consulta btn-sm" 
@@ -256,16 +437,33 @@ try {
                                                 </a>
                                                 <?php endif; ?>
                                                 
-                                                <a href="?cambiar_estado&id=<?php echo $cita['id']; ?>&estado=confirmada" 
-                                                   class="btn btn-outline-success btn-sm" title="Confirmar Cita">
-                                                    <i class="bi bi-check"></i>
-                                                </a>
-                                                <a href="?cambiar_estado&id=<?php echo $cita['id']; ?>&estado=cancelada" 
-                                                   class="btn btn-outline-danger btn-sm" title="Cancelar Cita">
-                                                    <i class="bi bi-x"></i>
-                                                </a>
+                                                <!-- Para doctores: solo pueden confirmar/completar sus propias citas -->
+                                                <?php if ($rol_usuario == 'doctor' || $rol_usuario == 'medico' || $rol_usuario == 'secretaria' || $rol_usuario == 'admin'): ?>
+                                                    <?php if ($cita['estado'] === 'pendiente'): ?>
+                                                    <a href="?cambiar_estado&id=<?php echo $cita['id']; ?>&estado=confirmada" 
+                                                       class="btn btn-outline-success btn-sm" title="Confirmar Cita">
+                                                        <i class="bi bi-check"></i>
+                                                    </a>
+                                                    <?php elseif ($cita['estado'] === 'confirmada'): ?>
+                                                    <a href="?cambiar_estado&id=<?php echo $cita['id']; ?>&estado=completada" 
+                                                       class="btn btn-outline-primary btn-sm" title="Marcar como Completada">
+                                                        <i class="bi bi-check-all"></i>
+                                                    </a>
+                                                    <?php endif; ?>
+                                                    
+                                                    <a href="?cambiar_estado&id=<?php echo $cita['id']; ?>&estado=cancelada" 
+                                                       class="btn btn-outline-danger btn-sm" title="Cancelar Cita">
+                                                        <i class="bi bi-x"></i>
+                                                    </a>
+                                                <?php endif; ?>
                                             </div>
                                         </div>
+                                    </div>
+                                    <div class="mt-2">
+                                        <small class="text-muted">
+                                            <i class="bi bi-chat-left-text me-1"></i>
+                                            <?php echo !empty($cita['notas']) ? htmlspecialchars(substr($cita['notas'], 0, 50)) . '...' : 'Sin notas'; ?>
+                                        </small>
                                     </div>
                                 </div>
                             </div>
@@ -283,7 +481,10 @@ try {
             <!-- PRÓXIMAS CITAS -->
             <div class="card">
                 <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-calendar-week me-2"></i> Próximas citas (7 días)</h5>
+                    <h5 class="mb-0">
+                        <i class="bi bi-calendar-week me-2"></i> 
+                        <?php echo ($rol_usuario == 'doctor' || $rol_usuario == 'medico') ? 'Mis Próximas Citas' : 'Próximas citas (7 días)'; ?>
+                    </h5>
                 </div>
                 <div class="card-body">
                     <?php if ($proximas_citas && $proximas_citas->num_rows > 0): ?>
@@ -294,6 +495,9 @@ try {
                                         <th>Fecha</th>
                                         <th>Hora</th>
                                         <th>Paciente</th>
+                                        <?php if ($rol_usuario != 'doctor' && $rol_usuario != 'medico'): ?>
+                                        <th>Doctor</th>
+                                        <?php endif; ?>
                                         <th>Motivo</th>
                                         <th>Estado</th>
                                         <th>Acciones</th>
@@ -302,19 +506,33 @@ try {
                                 <tbody>
                                     <?php while($cita = $proximas_citas->fetch_assoc()): ?>
                                     <tr class="estado-<?php echo $cita['estado']; ?>">
-                                        <td><?php echo date('d/m/Y', strtotime($cita['fecha'])); ?></td>
+                                        <td>
+                                            <?php 
+                                            $fecha_cita = date('d/m/Y', strtotime($cita['fecha']));
+                                            $hoy = date('d/m/Y');
+                                            echo $fecha_cita == $hoy ? '<strong>HOY</strong>' : $fecha_cita; 
+                                            ?>
+                                        </td>
                                         <td><?php echo date('H:i', strtotime($cita['hora'])); ?></td>
                                         <td>
                                             <a href="pacientes.php?ver=<?php echo $cita['paciente_id']; ?>">
                                                 <?php echo htmlspecialchars($cita['paciente_nombre']); ?>
                                             </a>
                                         </td>
+                                        <?php if ($rol_usuario != 'doctor' && $rol_usuario != 'medico'): ?>
+                                        <td>
+                                            <span class="doctor-badge">
+                                                <?php echo htmlspecialchars($cita['doctor_nombre'] ?? 'No asignado'); ?>
+                                            </span>
+                                        </td>
+                                        <?php endif; ?>
                                         <td><?php echo htmlspecialchars(substr($cita['motivo'], 0, 30)) . '...'; ?></td>
                                         <td>
                                             <span class="badge bg-<?php 
                                                 switch($cita['estado']) {
                                                     case 'pendiente': echo 'warning'; break;
                                                     case 'confirmada': echo 'success'; break;
+                                                    case 'completada': echo 'primary'; break;
                                                     case 'cancelada': echo 'danger'; break;
                                                     default: echo 'info';
                                                 }
@@ -324,7 +542,7 @@ try {
                                         </td>
                                         <td>
                                             <div class="btn-group btn-group-sm">
-                                                <!-- BOTÓN PARA CREAR CONSULTA DESDE LA TABLA -->
+                                                <!-- BOTÓN PARA CREAR CONSULTA - CORREGIDO -->
                                                 <?php if ($cita['estado'] === 'pendiente' || $cita['estado'] === 'confirmada'): ?>
                                                 <a href="crear_consulta.php?cita_id=<?php echo $cita['id']; ?>&paciente_id=<?php echo $cita['paciente_id']; ?>" 
                                                    class="btn btn-success btn-sm"
@@ -333,22 +551,47 @@ try {
                                                 </a>
                                                 <?php endif; ?>
                                                 
-                                                <a href="?cambiar_estado&id=<?php echo $cita['id']; ?>&estado=confirmada" 
-                                                   class="btn btn-outline-success btn-sm" title="Confirmar">
-                                                    <i class="bi bi-check"></i>
-                                                </a>
-                                                
-                                                <a href="?cambiar_estado&id=<?php echo $cita['id']; ?>&estado=cancelada" 
-                                                   class="btn btn-outline-danger btn-sm" title="Cancelar">
-                                                    <i class="bi bi-x"></i>
-                                                </a>
-                                                
-                                                <a href="?eliminar_cita&id=<?php echo $cita['id']; ?>" 
-                                                   class="btn btn-outline-danger btn-sm"
-                                                   onclick="return confirm('¿Eliminar esta cita?')"
-                                                   title="Eliminar">
-                                                    <i class="bi bi-trash"></i>
-                                                </a>
+                                                <?php if ($rol_usuario == 'secretaria' || $rol_usuario == 'admin'): ?>
+                                                    <?php if ($cita['estado'] === 'pendiente'): ?>
+                                                    <a href="?cambiar_estado&id=<?php echo $cita['id']; ?>&estado=confirmada" 
+                                                       class="btn btn-outline-success btn-sm" title="Confirmar">
+                                                        <i class="bi bi-check"></i>
+                                                    </a>
+                                                    <?php elseif ($cita['estado'] === 'confirmada'): ?>
+                                                    <a href="?cambiar_estado&id=<?php echo $cita['id']; ?>&estado=completada" 
+                                                       class="btn btn-outline-primary btn-sm" title="Completar">
+                                                        <i class="bi bi-check-all"></i>
+                                                    </a>
+                                                    <?php endif; ?>
+                                                    
+                                                    <a href="?cambiar_estado&id=<?php echo $cita['id']; ?>&estado=cancelada" 
+                                                       class="btn btn-outline-danger btn-sm" title="Cancelar">
+                                                        <i class="bi bi-x"></i>
+                                                    </a>
+                                                    
+                                                    <a href="?eliminar_cita&id=<?php echo $cita['id']; ?>" 
+                                                       class="btn btn-outline-danger btn-sm"
+                                                       onclick="return confirm('¿Eliminar esta cita?')"
+                                                       title="Eliminar">
+                                                        <i class="bi bi-trash"></i>
+                                                    </a>
+                                                <?php elseif ($rol_usuario == 'doctor' || $rol_usuario == 'medico'): ?>
+                                                    <?php if ($cita['estado'] === 'pendiente'): ?>
+                                                    <a href="?cambiar_estado&id=<?php echo $cita['id']; ?>&estado=confirmada" 
+                                                       class="btn btn-outline-success btn-sm" title="Confirmar">
+                                                        <i class="bi bi-check"></i>
+                                                    </a>
+                                                    <?php elseif ($cita['estado'] === 'confirmada'): ?>
+                                                    <a href="?cambiar_estado&id=<?php echo $cita['id']; ?>&estado=completada" 
+                                                       class="btn btn-outline-primary btn-sm" title="Completar">
+                                                        <i class="bi bi-check-all"></i>
+                                                    </a>
+                                                    <?php endif; ?>
+                                                    <a href="?cambiar_estado&id=<?php echo $cita['id']; ?>&estado=cancelada" 
+                                                       class="btn btn-outline-danger btn-sm" title="Cancelar">
+                                                        <i class="bi bi-x"></i>
+                                                    </a>
+                                                <?php endif; ?>
                                             </div>
                                         </td>
                                     </tr>
@@ -364,10 +607,38 @@ try {
                     <?php endif; ?>
                 </div>
             </div>
+            
+            <!-- HORAS DISPONIBLES (solo para doctores) -->
+            <?php if (($rol_usuario == 'doctor' || $rol_usuario == 'medico') && isset($horas_disponibles)): ?>
+            <div class="card mt-4">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0"><i class="bi bi-clock me-2"></i> Mis Horas Disponibles para Hoy</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-12">
+                            <h6>Horas disponibles el <?php echo date('d/m/Y'); ?>:</h6>
+                            <div class="mt-2">
+                                <?php if (!empty($horas_disponibles)): ?>
+                                    <?php foreach($horas_disponibles as $hora): ?>
+                                        <span class="hora-disponible">
+                                            <i class="bi bi-check-circle me-1"></i><?php echo $hora; ?>
+                                        </span>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <p class="text-muted">No hay horas disponibles para hoy</p>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
         </div>
     </div>
     
-    <!-- MODAL NUEVA CITA -->
+    <!-- MODAL NUEVA CITA (solo para secretaria/admin) -->
+    <?php if ($rol_usuario == 'secretaria' || $rol_usuario == 'admin'): ?>
     <div class="modal fade" id="nuevaCitaModal" tabindex="-1">
         <div class="modal-dialog">
             <div class="modal-content">
@@ -377,18 +648,38 @@ try {
                         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body">
-                        <div class="mb-3">
-                            <label class="form-label">Paciente *</label>
-                            <select class="form-select" name="paciente_id" required>
-                                <option value="">Seleccionar paciente...</option>
-                                <?php if ($pacientes && $pacientes->num_rows > 0): ?>
-                                    <?php while($pac = $pacientes->fetch_assoc()): ?>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Paciente *</label>
+                                <select class="form-select" name="paciente_id" required id="pacienteSelect">
+                                    <option value="">Seleccionar paciente...</option>
+                                    <?php if ($pacientes && $pacientes->num_rows > 0): 
+                                        $pacientes->data_seek(0); // Reiniciar puntero
+                                        while($pac = $pacientes->fetch_assoc()): ?>
                                     <option value="<?php echo $pac['id']; ?>"><?php echo htmlspecialchars($pac['nombre']); ?></option>
                                     <?php endwhile; ?>
-                                <?php else: ?>
+                                    <?php else: ?>
                                     <option value="">No hay pacientes registrados</option>
-                                <?php endif; ?>
-                            </select>
+                                    <?php endif; ?>
+                                </select>
+                            </div>
+                            
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Doctor *</label>
+                                <select class="form-select" name="doctor_id" required id="doctorSelect">
+                                    <option value="">Seleccionar doctor...</option>
+                                    <?php if ($doctores && $doctores->num_rows > 0): 
+                                        $doctores->data_seek(0); // Reiniciar puntero
+                                        while($doc = $doctores->fetch_assoc()): ?>
+                                    <option value="<?php echo $doc['id']; ?>">
+                                        Dr. <?php echo htmlspecialchars($doc['nombre']); ?>
+                                    </option>
+                                    <?php endwhile; ?>
+                                    <?php else: ?>
+                                    <option value="">No hay doctores disponibles</option>
+                                    <?php endif; ?>
+                                </select>
+                            </div>
                         </div>
                         
                         <div class="row">
@@ -396,12 +687,19 @@ try {
                                 <label class="form-label">Fecha *</label>
                                 <input type="date" class="form-control" name="fecha" 
                                        value="<?php echo date('Y-m-d'); ?>" 
-                                       min="<?php echo date('Y-m-d'); ?>" required>
+                                       min="<?php echo date('Y-m-d'); ?>" 
+                                       id="fechaInput" required>
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label class="form-label">Hora *</label>
                                 <input type="time" class="form-control" name="hora" 
-                                       value="09:00" required>
+                                       value="09:00" 
+                                       id="horaInput" 
+                                       step="1800" 
+                                       min="08:00" 
+                                       max="17:00" 
+                                       required>
+                                <small class="text-muted">Horario: 8:00 - 17:00</small>
                             </div>
                         </div>
                         
@@ -445,19 +743,23 @@ try {
             </div>
         </div>
     </div>
+    <?php endif; ?>
     
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         // Validar fecha
-        document.querySelector('input[name="fecha"]').addEventListener('change', function() {
-            const fechaInput = this.value;
-            const hoy = new Date().toISOString().split('T')[0];
-            
-            if (fechaInput < hoy) {
-                alert('No puedes agendar citas en fechas pasadas');
-                this.value = hoy;
-            }
-        });
+        const fechaInput = document.getElementById('fechaInput');
+        if (fechaInput) {
+            fechaInput.addEventListener('change', function() {
+                const fechaSeleccionada = this.value;
+                const hoy = new Date().toISOString().split('T')[0];
+                
+                if (fechaSeleccionada < hoy) {
+                    alert('No puedes agendar citas en fechas pasadas');
+                    this.value = hoy;
+                }
+            });
+        }
         
         // Auto-cerrar mensajes después de 5 segundos
         setTimeout(() => {
@@ -466,6 +768,29 @@ try {
                 bsAlert.close();
             });
         }, 5000);
+        
+        // Validar que la hora esté dentro del horario laboral
+        const horaInput = document.getElementById('horaInput');
+        if (horaInput) {
+            horaInput.addEventListener('change', function() {
+                const hora = this.value;
+                const [horas, minutos] = hora.split(':').map(Number);
+                
+                if (horas < 8 || horas > 17 || (horas === 17 && minutos > 0)) {
+                    alert('Horario laboral: 8:00 - 17:00');
+                    this.value = '09:00';
+                }
+            });
+        }
+        
+        // Verificación simple de disponibilidad (sin AJAX por ahora)
+        const doctorSelect = document.getElementById('doctorSelect');
+        if (doctorSelect) {
+            doctorSelect.addEventListener('change', function() {
+                // Aquí podrías agregar lógica para verificar disponibilidad
+                console.log('Doctor seleccionado:', this.value);
+            });
+        }
     </script>
 </body>
 </html>
